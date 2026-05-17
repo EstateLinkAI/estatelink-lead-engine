@@ -12,15 +12,15 @@ const (
 )
 
 type Reason struct {
-	Code    string
-	Message string
-	Points  int
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Points  int    `json:"points"`
 }
 
 type Score struct {
-	ListingID int64
-	Value     int
-	Grade     Grade
-	Reasons   []Reason
-	CreatedAt time.Time
+	ListingID int64     `json:"listingId"`
+	Value     int       `json:"value"`
+	Grade     Grade     `json:"grade"`
+	Reasons   []Reason  `json:"reasons"`
+	CreatedAt time.Time `json:"createdAt"`
 }

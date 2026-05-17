@@ -3,21 +3,21 @@ package listing
 import "time"
 
 type Listing struct {
-	ID                  int64
-	Title               string
-	Description         string
-	Price               int
-	City                string
-	Postcode            string
-	PostcodeArea        string
-	PropertyType        string
-	Bedrooms            int
-	Bathrooms           int
-	RentalEstimate      int
-	MarketPriceEstimate int
-	DaysOnMarket        int
-	SourcePlatform      string
-	SourceURL           string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                  int64     `json:"id"`
+	Title               string    `json:"title"`
+	Description         string    `json:"description"`
+	Price               int       `json:"price"`
+	City                string    `json:"city"`
+	Postcode            string    `json:"postcode"`
+	PostcodeArea        string    `json:"postcodeArea"`
+	PropertyType        string    `json:"propertyType"`
+	Bedrooms            int       `json:"bedrooms"`
+	Bathrooms           int       `json:"bathrooms"`
+	RentalEstimate      int       `json:"rentalEstimate"`
+	MarketPriceEstimate int       `json:"marketPriceEstimate"`
+	DaysOnMarket        int       `json:"daysOnMarket"`
+	SourcePlatform      string    `json:"sourcePlatform"`
+	SourceURL           string    `json:"sourceUrl"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }

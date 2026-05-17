@@ -16,8 +16,8 @@ type LeadScoreRepository interface {
 }
 
 type Result struct {
-	Listing listing.Listing
-	Score   lead.Score
+	Listing listing.Listing `json:"listing"`
+	Score   lead.Score      `json:"score"`
 }
 
 type UseCase struct {
