@@ -1,6 +1,6 @@
 # EstateLink Lead Engine
 
-A production-style Go backend portfolio project for ingesting, scoring, ranking, and managing property investment leads.
+A production-style Go backend project for ingesting, scoring, ranking, and managing property investment leads.
 
 The system ingests property listings, normalises data, calculates explainable investment opportunity scores, stores results in PostgreSQL, and exposes a secure REST API with JWT authentication and role-based access control.
 
