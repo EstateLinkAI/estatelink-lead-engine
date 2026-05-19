@@ -12,6 +12,7 @@ import (
 
 	"github.com/nath070707/estatelink-lead-engine/internal/application/auth"
 	"github.com/nath070707/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/nath070707/estatelink-lead-engine/internal/application/readleads"
 	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
 	"github.com/nath070707/estatelink-lead-engine/internal/infrastructure/postgres"
 	httptransport "github.com/nath070707/estatelink-lead-engine/internal/transport/http"
@@ -33,15 +34,18 @@ func main() {
 
 	listingRepo := postgres.NewListingRepository(db)
 	leadScoreRepo := postgres.NewLeadScoreRepository(db)
+	leadReadRepo := postgres.NewLeadReadRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 
 	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo)
+	readLeadsUseCase := readleads.NewUseCase(leadReadRepo)
 
 	passwordHasher := auth.NewPasswordHasher()
 	tokenService := auth.NewTokenService("dev-secret-change-me", 24*time.Hour)
 	authService := auth.NewService(userRepo, passwordHasher, tokenService)
 
 	listingHandler := httptransport.NewListingHandler(ingestUseCase)
+	leadHandler := httptransport.NewLeadHandler(readLeadsUseCase)
 	authHandler := httptransport.NewAuthHandler(authService)
 
 	r := chi.NewRouter()
@@ -58,6 +62,7 @@ func main() {
 		r.Use(httptransport.AuthMiddleware(tokenService))
 
 		r.Get("/api/me", authHandler.Me)
+		leadHandler.RegisterRoutes(r)
 	})
 
 	r.Group(func(r chi.Router) {

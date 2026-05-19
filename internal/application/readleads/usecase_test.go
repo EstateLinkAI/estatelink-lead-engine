@@ -17,7 +17,7 @@ func (f *fakeRepository) List(ctx context.Context, filters lead.ListFilters) ([]
 }
 
 func (f *fakeRepository) GetByID(ctx context.Context, id string) (*lead.ReadModel, error) {
-	return &lead.ReadModel{ID: id}, nil
+	return &lead.ReadModel{ID: 1}, nil
 }
 
 func TestListAppliesDefaultPagination(t *testing.T) {

@@ -1,12 +1,12 @@
 package lead
 
 type ReadModel struct {
-	ID             string
-	ListingID      string
+	ID             int64
+	ListingID      int64
 	Title          string
-	Address        string
 	City           string
 	Postcode       string
+	PostcodeArea   string
 	PropertyType   string
 	Price          int
 	Bedrooms       int
@@ -18,8 +18,8 @@ type ReadModel struct {
 
 type ListFilters struct {
 	City           string
-	Postcode      string
-	PropertyType  string
+	PostcodeArea   string
+	PropertyType   string
 	SourcePlatform string
 	MinScore       *int
 	Limit          int
