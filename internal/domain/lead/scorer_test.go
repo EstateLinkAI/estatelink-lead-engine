@@ -3,7 +3,7 @@ package lead
 import (
 	"testing"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/listing"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 )
 
 func TestCalculateScoreReturnsHighScoreForStrongLead(t *testing.T) {

@@ -3,7 +3,7 @@ package http
 import (
 	"net/http"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 )
 
 func RequireRole(allowedRoles ...user.Role) func(http.Handler) http.Handler {

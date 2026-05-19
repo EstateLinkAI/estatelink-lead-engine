@@ -10,12 +10,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/application/auth"
-	"github.com/nath070707/estatelink-lead-engine/internal/application/ingestlisting"
-	"github.com/nath070707/estatelink-lead-engine/internal/application/readleads"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
-	"github.com/nath070707/estatelink-lead-engine/internal/infrastructure/postgres"
-	httptransport "github.com/nath070707/estatelink-lead-engine/internal/transport/http"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/infrastructure/postgres"
+	httptransport "github.com/EstateLinkAI/estatelink-lead-engine/internal/transport/http"
 )
 
 func main() {

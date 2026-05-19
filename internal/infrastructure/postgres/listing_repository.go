@@ -3,8 +3,8 @@ package postgres
 import (
 	"context"
 
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/listing"
 )
 
 type ListingRepository struct {

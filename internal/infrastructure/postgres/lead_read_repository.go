@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nath070707/estatelink-lead-engine/internal/application/readleads"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
 )
 
 type LeadReadRepository struct {

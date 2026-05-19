@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
 )
 
 type LeadScoreRepository struct {

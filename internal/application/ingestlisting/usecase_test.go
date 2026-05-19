@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/listing"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 )
 
 type fakeListingRepo struct{}

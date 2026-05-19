@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/application/auth"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 )
 
 type contextKey string

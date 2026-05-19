@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/listing"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 )
 
 func CalculateScore(l listing.Listing) Score {
@@ -220,9 +220,3 @@ func gradeFromScore(score int) Grade {
 		return GradeD
 	}
 }
-
-
-
-
-
-

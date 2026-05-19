@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 )
 
 type fakeRepository struct {

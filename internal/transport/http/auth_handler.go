@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	nethttp "net/http"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/application/auth"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 )
 
 type AuthHandler struct {
@@ -94,7 +94,6 @@ func (h *AuthHandler) Login(w nethttp.ResponseWriter, r *nethttp.Request) {
 		},
 	})
 }
-
 
 func (h *AuthHandler) Me(w nethttp.ResponseWriter, r *nethttp.Request) {
 	currentUser, ok := GetCurrentUser(r)

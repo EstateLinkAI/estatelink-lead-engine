@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 )
 
 func TestTokenGenerateAndVerify(t *testing.T) {

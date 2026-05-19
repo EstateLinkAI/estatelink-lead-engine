@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/application/readleads"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 )
 
 type LeadHandler struct {

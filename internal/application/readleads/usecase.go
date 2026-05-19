@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/lead"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 )
 
 var ErrLeadNotFound = errors.New("lead not found")

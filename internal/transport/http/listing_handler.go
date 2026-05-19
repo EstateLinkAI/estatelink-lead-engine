@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 	"github.com/go-chi/chi/v5"
-	"github.com/nath070707/estatelink-lead-engine/internal/application/ingestlisting"
-	"github.com/nath070707/estatelink-lead-engine/internal/domain/listing"
 )
 
 type ListingHandler struct {
