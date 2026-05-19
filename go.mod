@@ -4,9 +4,9 @@ go 1.25.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/go-chi/cors v1.2.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/EstateLinkAI/estatelink-lead-engine v0.0.0-20260519175026-632c36e1898a
 	golang.org/x/crypto v0.51.0
 )
 
