@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/importlistings"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
@@ -38,9 +39,11 @@ func main() {
 	leadScoreRepo := postgres.NewLeadScoreRepository(db)
 	leadReadRepo := postgres.NewLeadReadRepository(db)
 	userRepo := postgres.NewUserRepository(db)
+	rawListingRepo := postgres.NewRawListingRepository(db)
 
 	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo)
 	readLeadsUseCase := readleads.NewUseCase(leadReadRepo)
+	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, ingestUseCase)
 
 	passwordHasher := auth.NewPasswordHasher()
 	tokenService := auth.NewTokenService("dev-secret-change-me", 24*time.Hour)
@@ -49,16 +52,15 @@ func main() {
 	listingHandler := httptransport.NewListingHandler(ingestUseCase)
 	leadHandler := httptransport.NewLeadHandler(readLeadsUseCase)
 	authHandler := httptransport.NewAuthHandler(authService)
+	importHandler := httptransport.NewImportHandler(importListingsUseCase)
 
 	r := chi.NewRouter()
 
-	// Basic production-style middleware.
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Allow local Vite frontend to communicate with the Go API.
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{
 			"http://localhost:5173",
@@ -86,7 +88,7 @@ func main() {
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	r.Post("/api/auth/register", authHandler.Register)
@@ -104,6 +106,7 @@ func main() {
 		r.Use(httptransport.RequireRole(user.RoleAdmin, user.RoleAnalyst))
 
 		listingHandler.RegisterRoutes(r)
+		r.Post("/api/imports/clean-listings", importHandler.ImportCleanListings)
 	})
 
 	log.Println("server running on :8080")
