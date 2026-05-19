@@ -27,6 +27,11 @@ func main() {
 		log.Fatal("DATABASE_URL environment variable is required")
 	}
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is required")
+	}
+
 	ctx := context.Background()
 
 	db, err := pgxpool.New(ctx, databaseURL)
@@ -46,7 +51,7 @@ func main() {
 	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, ingestUseCase)
 
 	passwordHasher := auth.NewPasswordHasher()
-	tokenService := auth.NewTokenService("dev-secret-change-me", 24*time.Hour)
+	tokenService := auth.NewTokenService(jwtSecret, 24*time.Hour)
 	authService := auth.NewService(userRepo, passwordHasher, tokenService)
 
 	listingHandler := httptransport.NewListingHandler(ingestUseCase)
