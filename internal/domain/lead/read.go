@@ -1,19 +1,19 @@
 package lead
 
 type ReadModel struct {
-	ID             int64
-	ListingID      int64
-	Title          string
-	City           string
-	Postcode       string
-	PostcodeArea   string
-	PropertyType   string
-	Price          int
-	Bedrooms       int
-	SourcePlatform string
-	Score          int
-	Grade          string
-	Reasons        []string
+	ID             int64            `json:"id"`
+	ListingID      int64            `json:"listingId"`
+	Title          string           `json:"title"`
+	City           string           `json:"city"`
+	Postcode       string           `json:"postcode"`
+	PostcodeArea   string           `json:"postcodeArea"`
+	PropertyType   string           `json:"propertyType"`
+	Price          int              `json:"price"`
+	Bedrooms       int              `json:"bedrooms"`
+	SourcePlatform string           `json:"sourcePlatform"`
+	Score          int              `json:"score"`
+	Grade          string           `json:"grade"`
+	Reasons        []map[string]any `json:"reasons"`
 }
 
 type ListFilters struct {
