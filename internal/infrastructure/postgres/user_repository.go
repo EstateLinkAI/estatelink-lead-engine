@@ -88,3 +88,15 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*user.User, e
 
 	return &u, nil
 }
+
+func (r *UserRepository) UpdateRole(ctx context.Context, id string, role user.Role) error {
+	query := `
+		UPDATE users
+		SET role = $1,
+		    updated_at = NOW()
+		WHERE id = $2
+	`
+
+	_, err := r.db.Exec(ctx, query, role, id)
+	return err
+}

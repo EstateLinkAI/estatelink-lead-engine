@@ -8,6 +8,7 @@ import (
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/logactivity"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/activitylog"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
+	"github.com/go-chi/chi/v5"
 )
 
 type AuthHandler struct {
@@ -35,6 +36,10 @@ type loginRequest struct {
 
 type refreshRequest struct {
 	RefreshToken string `json:"refreshToken"`
+}
+
+type updateUserRoleRequest struct {
+	Role user.Role `json:"role"`
 }
 
 type authUserResponse struct {
@@ -70,7 +75,7 @@ func (h *AuthHandler) Register(w nethttp.ResponseWriter, r *nethttp.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(nethttp.StatusCreated)
 
-	json.NewEncoder(w).Encode(authUserResponse{
+	_ = json.NewEncoder(w).Encode(authUserResponse{
 		ID:    createdUser.ID,
 		Email: createdUser.Email,
 		Role:  createdUser.Role,
@@ -138,17 +143,49 @@ func (h *AuthHandler) Me(w nethttp.ResponseWriter, r *nethttp.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	json.NewEncoder(w).Encode(authUserResponse{
+	_ = json.NewEncoder(w).Encode(authUserResponse{
 		ID:    currentUser.ID,
 		Email: currentUser.Email,
 		Role:  currentUser.Role,
 	})
 }
 
+func (h *AuthHandler) UpdateUserRole(w nethttp.ResponseWriter, r *nethttp.Request) {
+	userID := chi.URLParam(r, "id")
+	if userID == "" {
+		writeJSON(w, nethttp.StatusBadRequest, map[string]string{
+			"error": "user id is required",
+		})
+		return
+	}
+
+	var req updateUserRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, nethttp.StatusBadRequest, map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	if err := h.auth.UpdateUserRole(r.Context(), auth.UpdateUserRoleInput{
+		UserID: userID,
+		Role:   req.Role,
+	}); err != nil {
+		writeJSON(w, nethttp.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, nethttp.StatusOK, map[string]string{
+		"message": "user role updated",
+	})
+}
+
 func writeLoginResponse(w nethttp.ResponseWriter, result *auth.LoginOutput) {
 	w.Header().Set("Content-Type", "application/json")
 
-	json.NewEncoder(w).Encode(loginResponse{
+	_ = json.NewEncoder(w).Encode(loginResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
 		User: authUserResponse{
