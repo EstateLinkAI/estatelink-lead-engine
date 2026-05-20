@@ -5,15 +5,21 @@ import (
 	nethttp "net/http"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/logactivity"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/activitylog"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 )
 
 type AuthHandler struct {
-	auth *auth.Service
+	auth            *auth.Service
+	activityService *logactivity.Service
 }
 
-func NewAuthHandler(authService *auth.Service) *AuthHandler {
-	return &AuthHandler{auth: authService}
+func NewAuthHandler(authService *auth.Service, activityService *logactivity.Service) *AuthHandler {
+	return &AuthHandler{
+		auth:            authService,
+		activityService: activityService,
+	}
 }
 
 type registerRequest struct {
@@ -87,6 +93,19 @@ func (h *AuthHandler) Login(w nethttp.ResponseWriter, r *nethttp.Request) {
 		nethttp.Error(w, err.Error(), nethttp.StatusUnauthorized)
 		return
 	}
+
+	ipAddress, userAgent := requestMetadata(r)
+	logActivityBestEffort(r.Context(), h.activityService, activitylog.ActivityLog{
+		ActorUserID: result.User.ID,
+		Action:      "user.logged_in",
+		EntityType:  "user",
+		Metadata: map[string]interface{}{
+			"email": result.User.Email,
+			"role":  result.User.Role,
+		},
+		IPAddress: ipAddress,
+		UserAgent: userAgent,
+	})
 
 	writeLoginResponse(w, result)
 }

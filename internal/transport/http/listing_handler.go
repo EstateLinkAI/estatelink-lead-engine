@@ -5,17 +5,21 @@ import (
 	"net/http"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/logactivity"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/activitylog"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 	"github.com/go-chi/chi/v5"
 )
 
 type ListingHandler struct {
-	ingestUseCase *ingestlisting.UseCase
+	ingestUseCase   *ingestlisting.UseCase
+	activityService *logactivity.Service
 }
 
-func NewListingHandler(ingestUseCase *ingestlisting.UseCase) *ListingHandler {
+func NewListingHandler(ingestUseCase *ingestlisting.UseCase, activityService *logactivity.Service) *ListingHandler {
 	return &ListingHandler{
-		ingestUseCase: ingestUseCase,
+		ingestUseCase:   ingestUseCase,
+		activityService: activityService,
 	}
 }
 
@@ -41,14 +45,24 @@ func (h *ListingHandler) CreateListing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, result)
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+	currentUser, ok := GetCurrentUser(r)
+	if ok {
+		ipAddress, userAgent := requestMetadata(r)
+		logActivityBestEffort(r.Context(), h.activityService, activitylog.ActivityLog{
+			ActorUserID: currentUser.ID,
+			Action:      "listing.ingested",
+			EntityType:  "listing",
+			EntityID:    result.Listing.ID,
+			Metadata: map[string]interface{}{
+				"city":            result.Listing.City,
+				"postcode_area":   result.Listing.PostcodeArea,
+				"property_type":   result.Listing.PropertyType,
+				"source_platform": result.Listing.SourcePlatform,
+			},
+			IPAddress: ipAddress,
+			UserAgent: userAgent,
+		})
 	}
+
+	writeJSON(w, http.StatusCreated, result)
 }

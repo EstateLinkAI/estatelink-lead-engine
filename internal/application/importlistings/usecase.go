@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/activitylog"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/importjob"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/rawlisting"
@@ -35,20 +37,34 @@ type ListingIngester interface {
 }
 
 type UseCase struct {
-	rawListings RawListingRepository
-	importJobs  ImportJobRepository
-	ingester    ListingIngester
+	rawListings    RawListingRepository
+	importJobs     ImportJobRepository
+	ingester       ListingIngester
+	activityLogger ActivityLogger
+}
+
+type ActivityLogger interface {
+	Log(ctx context.Context, log activitylog.ActivityLog) error
+}
+
+type ActivityContext struct {
+	ActorUserID string
+	IPAddress   string
+	UserAgent   string
+	Filename    string
 }
 
 func NewUseCase(
 	rawListings RawListingRepository,
 	importJobs ImportJobRepository,
 	ingester ListingIngester,
+	activityLogger ActivityLogger,
 ) *UseCase {
 	return &UseCase{
-		rawListings: rawListings,
-		importJobs:  importJobs,
-		ingester:    ingester,
+		rawListings:    rawListings,
+		importJobs:     importJobs,
+		ingester:       ingester,
+		activityLogger: activityLogger,
 	}
 }
 
@@ -76,7 +92,7 @@ type cleanListingInput struct {
 	DateAdded           string `json:"date_added"`
 }
 
-func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.RawMessage) (StartImportResult, error) {
+func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.RawMessage, activityCtx ActivityContext) (StartImportResult, error) {
 	if len(payload) == 0 {
 		return StartImportResult{}, errors.New("import payload cannot be empty")
 	}
@@ -89,7 +105,22 @@ func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.R
 	payloadCopy := make([]json.RawMessage, len(payload))
 	copy(payloadCopy, payload)
 
-	go u.processImportJob(context.Background(), job.ID, payloadCopy)
+	u.logActivityBestEffort(ctx, activitylog.ActivityLog{
+		ActorUserID: activityCtx.ActorUserID,
+		Action:      "import.started",
+		EntityType:  "import_job",
+		Metadata: buildImportMetadata(
+			activityCtx.Filename,
+			map[string]interface{}{
+				"import_type": "clean_listings",
+				"job_id":      job.ID,
+			},
+		),
+		IPAddress: activityCtx.IPAddress,
+		UserAgent: activityCtx.UserAgent,
+	})
+
+	go u.processImportJob(context.Background(), job.ID, payloadCopy, activityCtx)
 
 	return StartImportResult{
 		JobID:  job.ID,
@@ -102,9 +133,10 @@ func (u *UseCase) GetImportJob(ctx context.Context, id string) (importjob.Import
 	return u.importJobs.GetByID(ctx, id)
 }
 
-func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []json.RawMessage) {
+func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []json.RawMessage, activityCtx ActivityContext) {
 	if err := u.importJobs.MarkProcessing(ctx, jobID); err != nil {
 		_ = u.importJobs.MarkFailed(ctx, jobID, err.Error())
+		u.logImportFailure(ctx, jobID, activityCtx, err.Error())
 		return
 	}
 
@@ -120,15 +152,45 @@ func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []
 	job, err := u.importJobs.GetByID(ctx, jobID)
 	if err != nil {
 		_ = u.importJobs.MarkFailed(ctx, jobID, err.Error())
+		u.logImportFailure(ctx, jobID, activityCtx, err.Error())
 		return
 	}
 
 	if job.FailedCount > 0 && job.ProcessedCount == 0 {
-		_ = u.importJobs.MarkFailed(ctx, jobID, "all listings failed to import")
+		reason := "all listings failed to import"
+		_ = u.importJobs.MarkFailed(ctx, jobID, reason)
+		u.logImportFailure(ctx, jobID, activityCtx, reason)
 		return
 	}
 
-	_ = u.importJobs.MarkCompleted(ctx, jobID)
+	if err := u.importJobs.MarkCompleted(ctx, jobID); err != nil {
+		u.logImportFailure(ctx, jobID, activityCtx, err.Error())
+		return
+	}
+
+	completedJob, err := u.importJobs.GetByID(ctx, jobID)
+	if err != nil {
+		u.logImportFailure(ctx, jobID, activityCtx, err.Error())
+		return
+	}
+
+	u.logActivityBestEffort(ctx, activitylog.ActivityLog{
+		ActorUserID: activityCtx.ActorUserID,
+		Action:      "import.completed",
+		EntityType:  "import_job",
+		Metadata: buildImportMetadata(
+			activityCtx.Filename,
+			map[string]interface{}{
+				"import_type":    "clean_listings",
+				"job_id":         jobID,
+				"total_rows":     completedJob.TotalCount,
+				"processed_rows": completedJob.ProcessedCount,
+				"failed_rows":    completedJob.FailedCount,
+			},
+		),
+		IPAddress: activityCtx.IPAddress,
+		UserAgent: activityCtx.UserAgent,
+	})
 }
 
 func (u *UseCase) processOne(ctx context.Context, jobID string, raw json.RawMessage) error {
@@ -253,4 +315,40 @@ func calculateDaysOnMarket(dateAdded string) int {
 	}
 
 	return days
+}
+
+func (u *UseCase) logImportFailure(ctx context.Context, jobID string, activityCtx ActivityContext, message string) {
+	u.logActivityBestEffort(ctx, activitylog.ActivityLog{
+		ActorUserID: activityCtx.ActorUserID,
+		Action:      "import.failed",
+		EntityType:  "import_job",
+		Metadata: buildImportMetadata(
+			activityCtx.Filename,
+			map[string]interface{}{
+				"import_type": "clean_listings",
+				"job_id":      jobID,
+				"error":       message,
+			},
+		),
+		IPAddress: activityCtx.IPAddress,
+		UserAgent: activityCtx.UserAgent,
+	})
+}
+
+func (u *UseCase) logActivityBestEffort(ctx context.Context, entry activitylog.ActivityLog) {
+	if u.activityLogger == nil {
+		return
+	}
+
+	if err := u.activityLogger.Log(ctx, entry); err != nil {
+		log.Printf("activity log failed for action %q: %v", entry.Action, err)
+	}
+}
+
+func buildImportMetadata(filename string, fields map[string]interface{}) map[string]interface{} {
+	if filename != "" {
+		fields["filename"] = filename
+	}
+
+	return fields
 }
