@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/importlistings"
 )
 
@@ -27,7 +29,7 @@ func (h *ImportHandler) ImportCleanListings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	result, err := h.useCase.ImportCleanListings(r.Context(), payload)
+	result, err := h.useCase.StartCleanListingsImport(r.Context(), payload)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": err.Error(),
@@ -35,5 +37,25 @@ func (h *ImportHandler) ImportCleanListings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+func (h *ImportHandler) GetImportJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "jobId")
+	if jobID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "job id is required",
+		})
+		return
+	}
+
+	job, err := h.useCase.GetImportJob(r.Context(), jobID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, job)
 }

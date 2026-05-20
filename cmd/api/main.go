@@ -45,10 +45,11 @@ func main() {
 	leadReadRepo := postgres.NewLeadReadRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	rawListingRepo := postgres.NewRawListingRepository(db)
+	importJobRepo := postgres.NewImportJobRepository(db)
 
 	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo)
 	readLeadsUseCase := readleads.NewUseCase(leadReadRepo)
-	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, ingestUseCase)
+	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, importJobRepo, ingestUseCase)
 
 	passwordHasher := auth.NewPasswordHasher()
 	tokenService := auth.NewTokenService(jwtSecret, 24*time.Hour)
@@ -112,6 +113,7 @@ func main() {
 
 		listingHandler.RegisterRoutes(r)
 		r.Post("/api/imports/clean-listings", importHandler.ImportCleanListings)
+		r.Get("/api/imports/{jobId}", importHandler.GetImportJob)
 	})
 
 	log.Println("server running on :8080")
