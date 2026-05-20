@@ -45,10 +45,6 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*user.User
 		return nil, errors.New("password is required")
 	}
 
-	if !input.Role.IsValid() {
-		return nil, errors.New("invalid role")
-	}
-
 	existingUser, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, err
@@ -63,7 +59,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*user.User
 		return nil, err
 	}
 
-	newUser, err := user.New(email, passwordHash, input.Role)
+	newUser, err := user.New(email, passwordHash, user.RoleViewer)
 	if err != nil {
 		return nil, err
 	}

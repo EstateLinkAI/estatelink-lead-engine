@@ -64,8 +64,8 @@ func TestRegisterCreatesUser(t *testing.T) {
 		t.Fatal("expected password to be hashed")
 	}
 
-	if createdUser.Role != user.RoleAdmin {
-		t.Fatalf("expected admin role, got %s", createdUser.Role)
+	if createdUser.Role != user.RoleViewer {
+		t.Fatalf("expected viewer role, got %s", createdUser.Role)
 	}
 }
 
