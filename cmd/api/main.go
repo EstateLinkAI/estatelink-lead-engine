@@ -32,6 +32,9 @@ func main() {
 		log.Fatal("JWT_SECRET environment variable is required")
 	}
 
+	accessTokenTTL := getDurationEnv("ACCESS_TOKEN_TTL", 24*time.Hour)
+	refreshTokenTTL := getDurationEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour)
+
 	ctx := context.Background()
 
 	db, err := pgxpool.New(ctx, databaseURL)
@@ -52,7 +55,7 @@ func main() {
 	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, importJobRepo, ingestUseCase)
 
 	passwordHasher := auth.NewPasswordHasher()
-	tokenService := auth.NewTokenService(jwtSecret, 24*time.Hour)
+	tokenService := auth.NewTokenService(jwtSecret, accessTokenTTL, refreshTokenTTL)
 	authService := auth.NewService(userRepo, passwordHasher, tokenService)
 
 	listingHandler := httptransport.NewListingHandler(ingestUseCase)
@@ -99,6 +102,7 @@ func main() {
 
 	r.Post("/api/auth/register", authHandler.Register)
 	r.Post("/api/auth/login", authHandler.Login)
+	r.Post("/api/auth/refresh", authHandler.Refresh)
 
 	r.Group(func(r chi.Router) {
 		r.Use(httptransport.AuthMiddleware(tokenService))
@@ -121,4 +125,18 @@ func main() {
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
+}
+
+func getDurationEnv(name string, fallback time.Duration) time.Duration {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		log.Fatalf("%s must be a valid Go duration, got %q: %v", name, value, err)
+	}
+
+	return duration
 }

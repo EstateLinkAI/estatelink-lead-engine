@@ -81,8 +81,9 @@ type LoginInput struct {
 }
 
 type LoginOutput struct {
-	Token string
-	User  *user.User
+	AccessToken  string
+	RefreshToken string
+	User         *user.User
 }
 
 func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, error) {
@@ -109,13 +110,49 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*LoginOutput, er
 		return nil, errors.New("invalid email or password")
 	}
 
-	token, err := s.tokens.Generate(existingUser)
+	tokens, err := s.tokens.GenerateTokenPair(existingUser)
 	if err != nil {
 		return nil, err
 	}
 
 	return &LoginOutput{
-		Token: token,
-		User:  existingUser,
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		User:         existingUser,
+	}, nil
+}
+
+type RefreshInput struct {
+	RefreshToken string
+}
+
+func (s *Service) Refresh(ctx context.Context, input RefreshInput) (*LoginOutput, error) {
+	if strings.TrimSpace(input.RefreshToken) == "" {
+		return nil, errors.New("refresh token is required")
+	}
+
+	claims, err := s.tokens.VerifyRefreshToken(input.RefreshToken)
+	if err != nil {
+		return nil, errors.New("invalid refresh token")
+	}
+
+	existingUser, err := s.users.FindByID(ctx, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	if existingUser == nil {
+		return nil, errors.New("user not found")
+	}
+
+	tokens, err := s.tokens.GenerateTokenPair(existingUser)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginOutput{
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		User:         existingUser,
 	}, nil
 }

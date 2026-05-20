@@ -12,7 +12,7 @@ import (
 )
 
 func TestAuthMiddlewareRejectsMissingToken(t *testing.T) {
-	tokenService := auth.NewTokenService("test-secret", time.Hour)
+	tokenService := auth.NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	handler := AuthMiddleware(tokenService)(
 		nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -31,9 +31,9 @@ func TestAuthMiddlewareRejectsMissingToken(t *testing.T) {
 }
 
 func TestAuthMiddlewareAllowsValidToken(t *testing.T) {
-	tokenService := auth.NewTokenService("test-secret", time.Hour)
+	tokenService := auth.NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
-	token, err := tokenService.Generate(&user.User{
+	token, err := tokenService.GenerateAccessToken(&user.User{
 		ID:    "user-123",
 		Email: "admin@estatelink.dev",
 		Role:  user.RoleAdmin,
@@ -66,6 +66,36 @@ func TestAuthMiddlewareAllowsValidToken(t *testing.T) {
 
 	if rec.Code != nethttp.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestAuthMiddlewareRejectsRefreshToken(t *testing.T) {
+	tokenService := auth.NewTokenService("test-secret", time.Hour, 24*time.Hour)
+
+	token, err := tokenService.GenerateRefreshToken(&user.User{
+		ID:    "user-123",
+		Email: "admin@estatelink.dev",
+		Role:  user.RoleAdmin,
+	})
+	if err != nil {
+		t.Fatalf("failed to generate refresh token: %v", err)
+	}
+
+	handler := AuthMiddleware(tokenService)(
+		nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			w.WriteHeader(nethttp.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(nethttp.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 }
 

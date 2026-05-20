@@ -42,7 +42,7 @@ func (r *fakeUserRepo) FindByID(ctx context.Context, id string) (*user.User, err
 func TestRegisterCreatesUser(t *testing.T) {
 	repo := newFakeUserRepo()
 	hasher := NewPasswordHasher()
-	tokens := NewTokenService("test-secret", time.Hour)
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	service := NewService(repo, hasher, tokens)
 
@@ -72,7 +72,7 @@ func TestRegisterCreatesUser(t *testing.T) {
 func TestRegisterRejectsDuplicateEmail(t *testing.T) {
 	repo := newFakeUserRepo()
 	hasher := NewPasswordHasher()
-	tokens := NewTokenService("test-secret", time.Hour)
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	service := NewService(repo, hasher, tokens)
 
@@ -91,10 +91,10 @@ func TestRegisterRejectsDuplicateEmail(t *testing.T) {
 	}
 }
 
-func TestLoginReturnsToken(t *testing.T) {
+func TestLoginReturnsTokenPair(t *testing.T) {
 	repo := newFakeUserRepo()
 	hasher := NewPasswordHasher()
-	tokens := NewTokenService("test-secret", time.Hour)
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	service := NewService(repo, hasher, tokens)
 
@@ -115,8 +115,12 @@ func TestLoginReturnsToken(t *testing.T) {
 		t.Fatalf("expected login to succeed, got %v", err)
 	}
 
-	if result.Token == "" {
-		t.Fatal("expected token")
+	if result.AccessToken == "" {
+		t.Fatal("expected access token")
+	}
+
+	if result.RefreshToken == "" {
+		t.Fatal("expected refresh token")
 	}
 
 	if result.User.Email != "admin@estatelink.dev" {
@@ -127,7 +131,7 @@ func TestLoginReturnsToken(t *testing.T) {
 func TestLoginRejectsBadPassword(t *testing.T) {
 	repo := newFakeUserRepo()
 	hasher := NewPasswordHasher()
-	tokens := NewTokenService("test-secret", time.Hour)
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	service := NewService(repo, hasher, tokens)
 
@@ -147,5 +151,45 @@ func TestLoginRejectsBadPassword(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected bad password to fail")
+	}
+}
+
+func TestRefreshReturnsNewTokenPair(t *testing.T) {
+	repo := newFakeUserRepo()
+	hasher := NewPasswordHasher()
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
+
+	service := NewService(repo, hasher, tokens)
+
+	_, err := service.Register(context.Background(), RegisterInput{
+		Email:    "admin@estatelink.dev",
+		Password: "Password123!",
+		Role:     user.RoleAdmin,
+	})
+	if err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	loginResult, err := service.Login(context.Background(), LoginInput{
+		Email:    "admin@estatelink.dev",
+		Password: "Password123!",
+	})
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+
+	refreshResult, err := service.Refresh(context.Background(), RefreshInput{
+		RefreshToken: loginResult.RefreshToken,
+	})
+	if err != nil {
+		t.Fatalf("expected refresh to succeed, got %v", err)
+	}
+
+	if refreshResult.AccessToken == "" {
+		t.Fatal("expected refreshed access token")
+	}
+
+	if refreshResult.RefreshToken == "" {
+		t.Fatal("expected refreshed refresh token")
 	}
 }

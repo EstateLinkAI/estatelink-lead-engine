@@ -34,7 +34,7 @@ func AuthMiddleware(tokenService *auth.TokenService) func(http.Handler) http.Han
 				return
 			}
 
-			claims, err := tokenService.Verify(tokenString)
+			claims, err := tokenService.VerifyAccessToken(tokenString)
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return

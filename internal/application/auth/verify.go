@@ -1,10 +1,22 @@
 package auth
 
 import (
+	"errors"
+
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func (s *TokenService) Verify(tokenString string) (*Claims, error) {
+var ErrInvalidTokenType = errors.New("invalid token type")
+
+func (s *TokenService) VerifyAccessToken(tokenString string) (*Claims, error) {
+	return s.verify(tokenString, TokenTypeAccess)
+}
+
+func (s *TokenService) VerifyRefreshToken(tokenString string) (*Claims, error) {
+	return s.verify(tokenString, TokenTypeRefresh)
+}
+
+func (s *TokenService) verify(tokenString string, expectedType TokenType) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(
 		tokenString,
 		&Claims{},
@@ -20,6 +32,10 @@ func (s *TokenService) Verify(tokenString string) (*Claims, error) {
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
 		return nil, jwt.ErrTokenInvalidClaims
+	}
+
+	if claims.TokenType != expectedType {
+		return nil, ErrInvalidTokenType
 	}
 
 	return claims, nil

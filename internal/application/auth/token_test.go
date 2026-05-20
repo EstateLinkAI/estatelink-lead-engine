@@ -8,7 +8,7 @@ import (
 )
 
 func TestTokenGenerateAndVerify(t *testing.T) {
-	tokenService := NewTokenService("test-secret", time.Hour)
+	tokenService := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
 	u := &user.User{
 		ID:    "user-123",
@@ -16,12 +16,12 @@ func TestTokenGenerateAndVerify(t *testing.T) {
 		Role:  user.RoleAdmin,
 	}
 
-	token, err := tokenService.Generate(u)
+	token, err := tokenService.GenerateAccessToken(u)
 	if err != nil {
 		t.Fatalf("expected token generation to succeed, got %v", err)
 	}
 
-	claims, err := tokenService.Verify(token)
+	claims, err := tokenService.VerifyAccessToken(token)
 	if err != nil {
 		t.Fatalf("expected token verification to succeed, got %v", err)
 	}
@@ -37,14 +37,38 @@ func TestTokenGenerateAndVerify(t *testing.T) {
 	if claims.Role != u.Role {
 		t.Fatalf("expected role %s, got %s", u.Role, claims.Role)
 	}
+
+	if claims.TokenType != TokenTypeAccess {
+		t.Fatalf("expected token type %s, got %s", TokenTypeAccess, claims.TokenType)
+	}
 }
 
 func TestTokenVerifyRejectsInvalidToken(t *testing.T) {
-	tokenService := NewTokenService("test-secret", time.Hour)
+	tokenService := NewTokenService("test-secret", time.Hour, 24*time.Hour)
 
-	_, err := tokenService.Verify("invalid-token")
+	_, err := tokenService.VerifyAccessToken("invalid-token")
 
 	if err == nil {
 		t.Fatal("expected invalid token to fail")
+	}
+}
+
+func TestAccessVerificationRejectsRefreshToken(t *testing.T) {
+	tokenService := NewTokenService("test-secret", time.Hour, 24*time.Hour)
+
+	u := &user.User{
+		ID:    "user-123",
+		Email: "admin@estatelink.dev",
+		Role:  user.RoleAdmin,
+	}
+
+	refreshToken, err := tokenService.GenerateRefreshToken(u)
+	if err != nil {
+		t.Fatalf("expected refresh token generation to succeed, got %v", err)
+	}
+
+	_, err = tokenService.VerifyAccessToken(refreshToken)
+	if err == nil {
+		t.Fatal("expected refresh token to be rejected for access verification")
 	}
 }

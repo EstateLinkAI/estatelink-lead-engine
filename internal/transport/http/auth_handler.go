@@ -27,6 +27,10 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type refreshRequest struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
 type authUserResponse struct {
 	ID    string    `json:"id"`
 	Email string    `json:"email"`
@@ -34,8 +38,9 @@ type authUserResponse struct {
 }
 
 type loginResponse struct {
-	Token string           `json:"token"`
-	User  authUserResponse `json:"user"`
+	AccessToken  string           `json:"accessToken"`
+	RefreshToken string           `json:"refreshToken"`
+	User         authUserResponse `json:"user"`
 }
 
 func (h *AuthHandler) Register(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -83,16 +88,26 @@ func (h *AuthHandler) Login(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	writeLoginResponse(w, result)
+}
 
-	json.NewEncoder(w).Encode(loginResponse{
-		Token: result.Token,
-		User: authUserResponse{
-			ID:    result.User.ID,
-			Email: result.User.Email,
-			Role:  result.User.Role,
-		},
+func (h *AuthHandler) Refresh(w nethttp.ResponseWriter, r *nethttp.Request) {
+	var req refreshRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		nethttp.Error(w, "invalid request body", nethttp.StatusBadRequest)
+		return
+	}
+
+	result, err := h.auth.Refresh(r.Context(), auth.RefreshInput{
+		RefreshToken: req.RefreshToken,
 	})
+	if err != nil {
+		nethttp.Error(w, err.Error(), nethttp.StatusUnauthorized)
+		return
+	}
+
+	writeLoginResponse(w, result)
 }
 
 func (h *AuthHandler) Me(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -108,5 +123,19 @@ func (h *AuthHandler) Me(w nethttp.ResponseWriter, r *nethttp.Request) {
 		ID:    currentUser.ID,
 		Email: currentUser.Email,
 		Role:  currentUser.Role,
+	})
+}
+
+func writeLoginResponse(w nethttp.ResponseWriter, result *auth.LoginOutput) {
+	w.Header().Set("Content-Type", "application/json")
+
+	json.NewEncoder(w).Encode(loginResponse{
+		AccessToken:  result.AccessToken,
+		RefreshToken: result.RefreshToken,
+		User: authUserResponse{
+			ID:    result.User.ID,
+			Email: result.User.Email,
+			Role:  result.User.Role,
+		},
 	})
 }

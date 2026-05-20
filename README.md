@@ -186,7 +186,42 @@ Example response:
 
 ```json
 {
-  "token": "jwt-token",
+  "token": "jwt-access-token",
+  "accessToken": "jwt-access-token",
+  "refreshToken": "jwt-refresh-token",
+  "user": {
+    "id": "uuid",
+    "email": "admin@estatelink.dev",
+    "role": "admin"
+  }
+}
+```
+
+`token` is a backwards-compatible alias of `accessToken`.
+
+---
+
+## Refresh Token
+
+```http
+POST /api/auth/refresh
+```
+
+Example request:
+
+```json
+{
+  "refreshToken": "jwt-refresh-token"
+}
+```
+
+Example response:
+
+```json
+{
+  "token": "jwt-access-token",
+  "accessToken": "jwt-access-token",
+  "refreshToken": "jwt-refresh-token",
   "user": {
     "id": "uuid",
     "email": "admin@estatelink.dev",
@@ -264,12 +299,20 @@ Required:
 
 ```txt
 DATABASE_URL
+JWT_SECRET
 ```
 
 Example:
 
 ```txt
 postgres://estatelink:estatelink_local_dev@localhost:5433/estatelink?sslmode=disable
+```
+
+Optional:
+
+```txt
+ACCESS_TOKEN_TTL=24h
+REFRESH_TOKEN_TTL=168h
 ```
 
 ---
@@ -383,7 +426,6 @@ Planned filters:
 
 - Public registration should default to `viewer`
 - Admin-only role promotion endpoint
-- Refresh tokens
 - Rate limiting
 - Structured audit logging
 - OpenAPI / Swagger documentation
