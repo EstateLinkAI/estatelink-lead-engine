@@ -29,7 +29,22 @@ func (h *ImportHandler) ImportCleanListings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	result, err := h.useCase.StartCleanListingsImport(r.Context(), payload)
+	currentUser, ok := GetCurrentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "not authenticated",
+		})
+		return
+	}
+
+	ipAddress, userAgent := requestMetadata(r)
+
+	result, err := h.useCase.StartCleanListingsImport(r.Context(), payload, importlistings.ActivityContext{
+		ActorUserID: currentUser.ID,
+		IPAddress:   ipAddress,
+		UserAgent:   userAgent,
+		Filename:    r.Header.Get("X-Filename"),
+	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": err.Error(),
