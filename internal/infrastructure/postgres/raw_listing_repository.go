@@ -27,6 +27,7 @@ func (r *RawListingRepository) Save(ctx context.Context, listing rawlisting.RawL
 
 	const query = `
 		INSERT INTO raw_listings (
+			import_job_id,
 			source,
 			external_property_id,
 			raw_payload,
@@ -34,9 +35,10 @@ func (r *RawListingRepository) Save(ctx context.Context, listing rawlisting.RawL
 			processing_status,
 			updated_at
 		)
-		VALUES ($1, $2, $3::jsonb, $4, $5, NOW())
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, NOW())
 		ON CONFLICT (source, external_property_id)
 		DO UPDATE SET
+			import_job_id = EXCLUDED.import_job_id,
 			raw_payload = EXCLUDED.raw_payload,
 			scraped_at = EXCLUDED.scraped_at,
 			processing_status = 'pending',
@@ -50,6 +52,7 @@ func (r *RawListingRepository) Save(ctx context.Context, listing rawlisting.RawL
 	err = r.db.QueryRow(
 		ctx,
 		query,
+		listing.ImportJobID,
 		listing.Source,
 		listing.ExternalPropertyID,
 		string(payload),

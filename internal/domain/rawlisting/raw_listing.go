@@ -7,6 +7,7 @@ import (
 
 type RawListing struct {
 	ID                 string
+	ImportJobID        *string
 	Source             string
 	ExternalPropertyID string
 	RawPayload         json.RawMessage

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/importjob"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/rawlisting"
 )
@@ -19,36 +20,42 @@ type RawListingRepository interface {
 	MarkFailed(ctx context.Context, id string, reason string) error
 }
 
+type ImportJobRepository interface {
+	Create(ctx context.Context, totalCount int) (importjob.ImportJob, error)
+	GetByID(ctx context.Context, id string) (importjob.ImportJob, error)
+	MarkProcessing(ctx context.Context, id string) error
+	IncrementProcessed(ctx context.Context, id string) error
+	IncrementFailed(ctx context.Context, id string) error
+	MarkCompleted(ctx context.Context, id string) error
+	MarkFailed(ctx context.Context, id string, reason string) error
+}
+
 type ListingIngester interface {
 	Execute(ctx context.Context, input listing.Listing) (ingestlisting.Result, error)
 }
 
 type UseCase struct {
 	rawListings RawListingRepository
+	importJobs  ImportJobRepository
 	ingester    ListingIngester
 }
 
-func NewUseCase(rawListings RawListingRepository, ingester ListingIngester) *UseCase {
+func NewUseCase(
+	rawListings RawListingRepository,
+	importJobs ImportJobRepository,
+	ingester ListingIngester,
+) *UseCase {
 	return &UseCase{
 		rawListings: rawListings,
+		importJobs:  importJobs,
 		ingester:    ingester,
 	}
 }
 
-type ImportResult struct {
-	Imported int              `json:"imported"`
-	Failed   int              `json:"failed"`
-	Items    []ImportItemInfo `json:"items"`
-}
-
-type ImportItemInfo struct {
-	RawListingID       string `json:"rawListingId,omitempty"`
-	ListingID          int64  `json:"listingId,omitempty"`
-	// LeadScoreID        int64  `json:"leadScoreId,omitempty"`
-	Source             string `json:"source,omitempty"`
-	ExternalPropertyID string `json:"externalPropertyId,omitempty"`
-	Status             string `json:"status"`
-	Error              string `json:"error,omitempty"`
+type StartImportResult struct {
+	JobID  string `json:"jobId"`
+	Status string `json:"status"`
+	Total  int    `json:"total"`
 }
 
 type cleanListingInput struct {
@@ -69,57 +76,86 @@ type cleanListingInput struct {
 	DateAdded           string `json:"date_added"`
 }
 
-func (u *UseCase) ImportCleanListings(ctx context.Context, payload []json.RawMessage) (ImportResult, error) {
+func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.RawMessage) (StartImportResult, error) {
 	if len(payload) == 0 {
-		return ImportResult{}, errors.New("import payload cannot be empty")
+		return StartImportResult{}, errors.New("import payload cannot be empty")
 	}
 
-	result := ImportResult{
-		Items: make([]ImportItemInfo, 0, len(payload)),
+	job, err := u.importJobs.Create(ctx, len(payload))
+	if err != nil {
+		return StartImportResult{}, err
+	}
+
+	payloadCopy := make([]json.RawMessage, len(payload))
+	copy(payloadCopy, payload)
+
+	go u.processImportJob(context.Background(), job.ID, payloadCopy)
+
+	return StartImportResult{
+		JobID:  job.ID,
+		Status: job.Status,
+		Total:  job.TotalCount,
+	}, nil
+}
+
+func (u *UseCase) GetImportJob(ctx context.Context, id string) (importjob.ImportJob, error) {
+	return u.importJobs.GetByID(ctx, id)
+}
+
+func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []json.RawMessage) {
+	if err := u.importJobs.MarkProcessing(ctx, jobID); err != nil {
+		_ = u.importJobs.MarkFailed(ctx, jobID, err.Error())
+		return
 	}
 
 	for _, raw := range payload {
-		item, err := u.importOne(ctx, raw)
-		if err != nil {
-			result.Failed++
-			result.Items = append(result.Items, ImportItemInfo{
-				Status: rawlisting.StatusFailed,
-				Error:  err.Error(),
-			})
+		if err := u.processOne(ctx, jobID, raw); err != nil {
+			_ = u.importJobs.IncrementFailed(ctx, jobID)
 			continue
 		}
 
-		result.Imported++
-		result.Items = append(result.Items, item)
+		_ = u.importJobs.IncrementProcessed(ctx, jobID)
 	}
 
-	return result, nil
+	job, err := u.importJobs.GetByID(ctx, jobID)
+	if err != nil {
+		_ = u.importJobs.MarkFailed(ctx, jobID, err.Error())
+		return
+	}
+
+	if job.FailedCount > 0 && job.ProcessedCount == 0 {
+		_ = u.importJobs.MarkFailed(ctx, jobID, "all listings failed to import")
+		return
+	}
+
+	_ = u.importJobs.MarkCompleted(ctx, jobID)
 }
 
-func (u *UseCase) importOne(ctx context.Context, raw json.RawMessage) (ImportItemInfo, error) {
+func (u *UseCase) processOne(ctx context.Context, jobID string, raw json.RawMessage) error {
 	var input cleanListingInput
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return ImportItemInfo{}, fmt.Errorf("invalid listing JSON: %w", err)
+		return fmt.Errorf("invalid listing JSON: %w", err)
 	}
 
 	if input.Source == "" {
-		return ImportItemInfo{}, errors.New("source is required")
+		return errors.New("source is required")
 	}
 
 	if input.PropertyID == "" {
-		return ImportItemInfo{}, errors.New("property_id is required")
+		return errors.New("property_id is required")
 	}
 
 	var scrapedAt *time.Time
 	if input.ScrapedAt != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, input.ScrapedAt)
 		if err != nil {
-			return ImportItemInfo{}, fmt.Errorf("invalid scraped_at value: %w", err)
+			return fmt.Errorf("invalid scraped_at value: %w", err)
 		}
 		scrapedAt = &parsed
 	}
 
 	rawListing := rawlisting.RawListing{
+		ImportJobID:        &jobID,
 		Source:             input.Source,
 		ExternalPropertyID: input.PropertyID,
 		RawPayload:         raw,
@@ -129,29 +165,21 @@ func (u *UseCase) importOne(ctx context.Context, raw json.RawMessage) (ImportIte
 
 	rawListingID, err := u.rawListings.Save(ctx, rawListing)
 	if err != nil {
-		return ImportItemInfo{}, fmt.Errorf("save raw listing: %w", err)
+		return fmt.Errorf("save raw listing: %w", err)
 	}
 
 	mappedListing := mapCleanListingToDomain(input)
 
-	ingestResult, err := u.ingester.Execute(ctx, mappedListing)
-	if err != nil {
+	if _, err := u.ingester.Execute(ctx, mappedListing); err != nil {
 		_ = u.rawListings.MarkFailed(ctx, rawListingID, err.Error())
-
-		return ImportItemInfo{}, fmt.Errorf("ingest listing from raw listing %s: %w", rawListingID, err)
+		return fmt.Errorf("ingest listing from raw listing %s: %w", rawListingID, err)
 	}
 
 	if err := u.rawListings.MarkProcessed(ctx, rawListingID); err != nil {
-		return ImportItemInfo{}, fmt.Errorf("mark raw listing processed: %w", err)
+		return fmt.Errorf("mark raw listing processed: %w", err)
 	}
 
-	return ImportItemInfo{
-		RawListingID:       rawListingID,
-		ListingID:          ingestResult.Listing.ID,
-		Source:             input.Source,
-		ExternalPropertyID: input.PropertyID,
-		Status:             rawlisting.StatusProcessed,
-	}, nil
+	return nil
 }
 
 func mapCleanListingToDomain(input cleanListingInput) listing.Listing {
