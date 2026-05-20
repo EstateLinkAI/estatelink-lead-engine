@@ -39,6 +39,18 @@ func (r *fakeUserRepo) FindByID(ctx context.Context, id string) (*user.User, err
 	return r.usersByID[id], nil
 }
 
+func (r *fakeUserRepo) UpdateRole(ctx context.Context, id string, role user.Role) error {
+	existingUser := r.usersByID[id]
+	if existingUser == nil {
+		return nil
+	}
+
+	existingUser.Role = role
+	existingUser.UpdatedAt = time.Now()
+
+	return nil
+}
+
 func TestRegisterCreatesUser(t *testing.T) {
 	repo := newFakeUserRepo()
 	hasher := NewPasswordHasher()
@@ -191,5 +203,67 @@ func TestRefreshReturnsNewTokenPair(t *testing.T) {
 
 	if refreshResult.RefreshToken == "" {
 		t.Fatal("expected refreshed refresh token")
+	}
+}
+
+func TestUpdateUserRolePromotesUser(t *testing.T) {
+	repo := newFakeUserRepo()
+	hasher := NewPasswordHasher()
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
+
+	service := NewService(repo, hasher, tokens)
+
+	createdUser, err := service.Register(context.Background(), RegisterInput{
+		Email:    "viewer@estatelink.dev",
+		Password: "Password123!",
+		Role:     user.RoleAdmin,
+	})
+	if err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	if createdUser.Role != user.RoleViewer {
+		t.Fatalf("expected initial viewer role, got %s", createdUser.Role)
+	}
+
+	err = service.UpdateUserRole(context.Background(), UpdateUserRoleInput{
+		UserID: createdUser.ID,
+		Role:   user.RoleAdmin,
+	})
+	if err != nil {
+		t.Fatalf("expected role update to succeed, got %v", err)
+	}
+
+	updatedUser, err := repo.FindByID(context.Background(), createdUser.ID)
+	if err != nil {
+		t.Fatalf("expected find by id to succeed, got %v", err)
+	}
+
+	if updatedUser.Role != user.RoleAdmin {
+		t.Fatalf("expected admin role, got %s", updatedUser.Role)
+	}
+}
+
+func TestUpdateUserRoleRejectsInvalidRole(t *testing.T) {
+	repo := newFakeUserRepo()
+	hasher := NewPasswordHasher()
+	tokens := NewTokenService("test-secret", time.Hour, 24*time.Hour)
+
+	service := NewService(repo, hasher, tokens)
+
+	createdUser, err := service.Register(context.Background(), RegisterInput{
+		Email:    "viewer@estatelink.dev",
+		Password: "Password123!",
+	})
+	if err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	err = service.UpdateUserRole(context.Background(), UpdateUserRoleInput{
+		UserID: createdUser.ID,
+		Role:   user.Role("superadmin"),
+	})
+	if err == nil {
+		t.Fatal("expected invalid role update to fail")
 	}
 }
