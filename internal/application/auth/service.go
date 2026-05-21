@@ -12,6 +12,7 @@ type UserRepository interface {
 	Create(ctx context.Context, u *user.User) error
 	FindByEmail(ctx context.Context, email string) (*user.User, error)
 	FindByID(ctx context.Context, id string) (*user.User, error)
+	UpdateRole(ctx context.Context, id string, role user.Role) error
 }
 
 type Service struct {
@@ -45,10 +46,6 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*user.User
 		return nil, errors.New("password is required")
 	}
 
-	if !input.Role.IsValid() {
-		return nil, errors.New("invalid role")
-	}
-
 	existingUser, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		return nil, err
@@ -63,7 +60,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*user.User
 		return nil, err
 	}
 
-	newUser, err := user.New(email, passwordHash, input.Role)
+	newUser, err := user.New(email, passwordHash, user.RoleViewer)
 	if err != nil {
 		return nil, err
 	}
@@ -155,4 +152,30 @@ func (s *Service) Refresh(ctx context.Context, input RefreshInput) (*LoginOutput
 		RefreshToken: tokens.RefreshToken,
 		User:         existingUser,
 	}, nil
+}
+
+type UpdateUserRoleInput struct {
+	UserID string
+	Role   user.Role
+}
+
+func (s *Service) UpdateUserRole(ctx context.Context, input UpdateUserRoleInput) error {
+	if strings.TrimSpace(input.UserID) == "" {
+		return errors.New("user id is required")
+	}
+
+	if !input.Role.IsValid() {
+		return errors.New("invalid role")
+	}
+
+	existingUser, err := s.users.FindByID(ctx, input.UserID)
+	if err != nil {
+		return err
+	}
+
+	if existingUser == nil {
+		return errors.New("user not found")
+	}
+
+	return s.users.UpdateRole(ctx, input.UserID, input.Role)
 }

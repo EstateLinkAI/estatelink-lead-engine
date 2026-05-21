@@ -58,7 +58,12 @@ func main() {
 		Repo: activityLogRepo,
 	}
 
-	importListingsUseCase := importlistings.NewUseCase(rawListingRepo, importJobRepo, ingestUseCase, activityService)
+	importListingsUseCase := importlistings.NewUseCase(
+		rawListingRepo,
+		importJobRepo,
+		ingestUseCase,
+		activityService,
+	)
 
 	// Handlers
 	listingHandler := httptransport.NewListingHandler(ingestUseCase, activityService)
@@ -100,7 +105,7 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Public
+	// Public routes
 	r.Get("/health", healthHandler)
 
 	r.Post("/api/auth/register", authHandler.Register)
@@ -131,6 +136,8 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(httptransport.AuthMiddleware(tokenService))
 		r.Use(httptransport.RequireRole(user.RoleAdmin))
+
+		r.Patch("/api/admin/users/{id}/role", authHandler.UpdateUserRole)
 
 		activityHandler.RegisterRoutes(r)
 	})
