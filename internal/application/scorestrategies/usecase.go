@@ -9,7 +9,7 @@ import (
 )
 
 type ListingInput struct {
-	ListingID       int64
+	ListingID      int64
 	Price          int
 	RentalEstimate int
 	Bedrooms       int
@@ -20,7 +20,7 @@ type ListingInput struct {
 }
 
 type StrategyScoreRepository interface {
-	SaveMany(ctx context.Context, scores []strategy.StrategyScore) error
+	SaveMany(ctx context.Context, scores []strategy.StrategyScore) ([]strategy.StrategyScore, error)
 }
 
 type UseCase struct {
@@ -38,9 +38,12 @@ func (uc *UseCase) Execute(ctx context.Context, input ListingInput) ([]strategy.
 		return scores, nil
 	}
 
-	if err := uc.repo.SaveMany(ctx, scores); err != nil {
+	savedScores, err := uc.repo.SaveMany(ctx, scores)
+	if err != nil {
 		return nil, err
 	}
+
+	return savedScores, nil
 
 	return scores, nil
 }

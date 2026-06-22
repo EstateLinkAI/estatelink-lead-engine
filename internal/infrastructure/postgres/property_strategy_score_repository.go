@@ -17,14 +17,17 @@ func NewPropertyStrategyScoreRepository(db *pgxpool.Pool) *PropertyStrategyScore
 	return &PropertyStrategyScoreRepository{db: db}
 }
 
-func (r *PropertyStrategyScoreRepository) SaveMany(ctx context.Context, scores []strategy.StrategyScore) error {
+func (r *PropertyStrategyScoreRepository) SaveMany(
+	ctx context.Context,
+	scores []strategy.StrategyScore,
+) ([]strategy.StrategyScore, error) {
 	if len(scores) == 0 {
-		return nil
+		return []strategy.StrategyScore{}, nil
 	}
 
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin strategy score transaction: %w", err)
+		return nil, fmt.Errorf("begin strategy score transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -44,15 +47,20 @@ func (r *PropertyStrategyScoreRepository) SaveMany(ctx context.Context, scores [
 			grade = EXCLUDED.grade,
 			reasons = EXCLUDED.reasons,
 			created_at = EXCLUDED.created_at
+		RETURNING id, created_at
 	`
+
+	savedScores := make([]strategy.StrategyScore, 0, len(scores))
 
 	for _, score := range scores {
 		reasonsJSON, err := json.Marshal(score.Reasons)
 		if err != nil {
-			return fmt.Errorf("marshal strategy score reasons: %w", err)
+			return nil, fmt.Errorf("marshal strategy score reasons: %w", err)
 		}
 
-		_, err = tx.Exec(
+		savedScore := score
+
+		err = tx.QueryRow(
 			ctx,
 			query,
 			score.ListingID,
@@ -61,15 +69,25 @@ func (r *PropertyStrategyScoreRepository) SaveMany(ctx context.Context, scores [
 			score.Grade,
 			reasonsJSON,
 			score.CreatedAt,
+		).Scan(
+			&savedScore.ID,
+			&savedScore.CreatedAt,
 		)
 		if err != nil {
-			return fmt.Errorf("save strategy score for listing %d strategy %s: %w", score.ListingID, score.Strategy, err)
+			return nil, fmt.Errorf(
+				"save strategy score for listing %d strategy %s: %w",
+				score.ListingID,
+				score.Strategy,
+				err,
+			)
 		}
+
+		savedScores = append(savedScores, savedScore)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit strategy score transaction: %w", err)
+		return nil, fmt.Errorf("commit strategy score transaction: %w", err)
 	}
 
-	return nil
+	return savedScores, nil
 }
