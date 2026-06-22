@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/config"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/importlistings"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/logactivity"
@@ -17,6 +18,7 @@ import (
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/scorestrategies"
 	httptransport "github.com/EstateLinkAI/estatelink-lead-engine/internal/transport/http"
 	
+	
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -25,6 +27,7 @@ import (
 )
 
 func main() {
+	config.LoadEnv()
 	databaseURL := mustGetEnv("DATABASE_URL")
 	jwtSecret := mustGetEnv("JWT_SECRET")
 
