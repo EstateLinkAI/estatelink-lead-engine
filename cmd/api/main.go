@@ -14,7 +14,9 @@ import (
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/infrastructure/postgres"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/scorestrategies"
 	httptransport "github.com/EstateLinkAI/estatelink-lead-engine/internal/transport/http"
+	
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -40,14 +42,17 @@ func main() {
 	// Repositories
 	listingRepo := postgres.NewListingRepository(db)
 	leadScoreRepo := postgres.NewLeadScoreRepository(db)
+	strategyScoreRepo := postgres.NewPropertyStrategyScoreRepository(db)
 	leadReadRepo := postgres.NewLeadReadRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	rawListingRepo := postgres.NewRawListingRepository(db)
 	importJobRepo := postgres.NewImportJobRepository(db)
 	activityLogRepo := postgres.NewActivityLogRepository(db)
+	
 
 	// Use cases / services
-	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo)
+	strategyScorer := scorestrategies.NewUseCase(strategyScoreRepo)
+	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo, strategyScorer)
 	readLeadsUseCase := readleads.NewUseCase(leadReadRepo)
 
 	passwordHasher := auth.NewPasswordHasher()

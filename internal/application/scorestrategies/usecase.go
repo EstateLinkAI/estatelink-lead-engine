@@ -9,14 +9,14 @@ import (
 )
 
 type ListingInput struct {
-	ListingID     int64
-	Price        float64
-	MonthlyRent  float64
-	Bedrooms     int
-	PropertyType string
-	City         string
-	PostcodeArea string
-	DaysOnMarket int
+	ListingID       int64
+	Price          int
+	RentalEstimate int
+	Bedrooms       int
+	PropertyType   string
+	City           string
+	PostcodeArea   string
+	DaysOnMarket   int
 }
 
 type StrategyScoreRepository interface {
@@ -80,7 +80,7 @@ func scoreBuyToLet(input ListingInput) scoreResult {
 	score := 45
 	reasons := []string{}
 
-	yield := grossYield(input.Price, input.MonthlyRent)
+	yield := grossYield(input.Price, input.RentalEstimate)
 
 	switch {
 	case yield >= 8:
@@ -116,7 +116,7 @@ func scoreBRRRR(input ListingInput) scoreResult {
 	score := 40
 	reasons := []string{}
 
-	yield := grossYield(input.Price, input.MonthlyRent)
+	yield := grossYield(input.Price, input.RentalEstimate)
 
 	if yield >= 7 {
 		score += 20
@@ -133,7 +133,7 @@ func scoreBRRRR(input ListingInput) scoreResult {
 		reasons = append(reasons, "Bedroom count may support value-add rental strategy")
 	}
 
-	if input.Price > 0 && input.MonthlyRent == 0 {
+	if input.Price > 0 && input.RentalEstimate == 0 {
 		score -= 10
 		reasons = append(reasons, "Rental income estimate is missing")
 	}
@@ -187,7 +187,7 @@ func scoreBuyAndHold(input ListingInput) scoreResult {
 		reasons = append(reasons, "Location fields are available for future area intelligence")
 	}
 
-	yield := grossYield(input.Price, input.MonthlyRent)
+	yield := grossYield(input.Price, input.RentalEstimate)
 	if yield >= 5 {
 		score += 10
 		reasons = append(reasons, "Yield provides some income support for long-term hold")
@@ -216,7 +216,7 @@ func scoreHMO(input ListingInput) scoreResult {
 		reasons = append(reasons, "House type is more suitable for HMO layout")
 	}
 
-	yield := grossYield(input.Price, input.MonthlyRent)
+	yield := grossYield(input.Price, input.RentalEstimate)
 	if yield >= 7 {
 		score += 10
 		reasons = append(reasons, "Yield may support shared rental economics")
@@ -251,12 +251,12 @@ func scoreDevelopment(input ListingInput) scoreResult {
 	return scoreResult{score: score, reasons: reasons}
 }
 
-func grossYield(price float64, monthlyRent float64) float64 {
-	if price <= 0 || monthlyRent <= 0 {
+func grossYield(price int, rentalEstimate int) float64 {
+	if price <= 0 || rentalEstimate <= 0 {
 		return 0
 	}
 
-	return (monthlyRent * 12 / price) * 100
+	return (float64(rentalEstimate) * 12 / float64(price)) * 100
 }
 
 func clampScore(score int) int {

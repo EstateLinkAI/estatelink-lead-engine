@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/scorestrategies"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/lead"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/listing"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/strategy"
 )
 
 type fakeListingRepo struct{}
@@ -26,7 +28,13 @@ func (r *fakeLeadScoreRepo) Create(ctx context.Context, score lead.Score) (lead.
 }
 
 func TestExecuteNormalisesListingCalculatesScoreAndPersists(t *testing.T) {
-	uc := NewUseCase(&fakeListingRepo{}, &fakeLeadScoreRepo{})
+	strategyScorer := scorestrategies.NewUseCase(nil)
+
+	uc := NewUseCase(
+		&fakeListingRepo{},
+		&fakeLeadScoreRepo{},
+		strategyScorer,
+	)
 
 	input := listing.Listing{
 		Title:               "2 Bed Flat in Manchester",
@@ -66,5 +74,45 @@ func TestExecuteNormalisesListingCalculatesScoreAndPersists(t *testing.T) {
 
 	if result.Score.Value < 80 {
 		t.Fatalf("expected strong lead score, got %d", result.Score.Value)
+	}
+
+	if len(result.StrategyScores) != len(strategy.AllStrategies()) {
+		t.Fatalf("expected %d strategy scores, got %d", len(strategy.AllStrategies()), len(result.StrategyScores))
+	}
+}
+
+func TestExecuteCanRunWithoutStrategyScorer(t *testing.T) {
+	uc := NewUseCase(
+		&fakeListingRepo{},
+		&fakeLeadScoreRepo{},
+		nil,
+	)
+
+	input := listing.Listing{
+		Title:               "3 Bed House in Birmingham",
+		Description:         "Good rental demand",
+		Price:               300000,
+		City:                "birmingham",
+		Postcode:            "b12 8aa",
+		PropertyType:        "Terraced house",
+		Bedrooms:            3,
+		Bathrooms:           1,
+		RentalEstimate:      1800,
+		MarketPriceEstimate: 330000,
+		DaysOnMarket:        30,
+		SourcePlatform:      "Rightmove",
+	}
+
+	result, err := uc.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.Listing.ID == 0 {
+		t.Fatal("expected saved listing to have an ID")
+	}
+
+	if len(result.StrategyScores) != 0 {
+		t.Fatalf("expected no strategy scores when strategy scorer is nil, got %d", len(result.StrategyScores))
 	}
 }
