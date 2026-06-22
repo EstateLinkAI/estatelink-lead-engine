@@ -5,20 +5,19 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
-	"github.com/EstateLinkAI/estatelink-lead-engine/internal/config"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/importlistings"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/logactivity"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/readleads"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/scorestrategies"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/config"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/infrastructure/postgres"
-	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/scorestrategies"
 	httptransport "github.com/EstateLinkAI/estatelink-lead-engine/internal/transport/http"
-	
-	
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,6 +27,7 @@ import (
 
 func main() {
 	config.LoadEnv()
+
 	databaseURL := mustGetEnv("DATABASE_URL")
 	jwtSecret := mustGetEnv("JWT_SECRET")
 
@@ -42,6 +42,10 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := db.Ping(ctx); err != nil {
+		log.Fatalf("failed to ping database: %v", err)
+	}
+
 	// Repositories
 	listingRepo := postgres.NewListingRepository(db)
 	leadScoreRepo := postgres.NewLeadScoreRepository(db)
@@ -51,11 +55,16 @@ func main() {
 	rawListingRepo := postgres.NewRawListingRepository(db)
 	importJobRepo := postgres.NewImportJobRepository(db)
 	activityLogRepo := postgres.NewActivityLogRepository(db)
-	
 
 	// Use cases / services
 	strategyScorer := scorestrategies.NewUseCase(strategyScoreRepo)
-	ingestUseCase := ingestlisting.NewUseCase(listingRepo, leadScoreRepo, strategyScorer)
+
+	ingestUseCase := ingestlisting.NewUseCase(
+		listingRepo,
+		leadScoreRepo,
+		strategyScorer,
+	)
+
 	readLeadsUseCase := readleads.NewUseCase(leadReadRepo)
 
 	passwordHasher := auth.NewPasswordHasher()
@@ -89,10 +98,10 @@ func main() {
 	r.Use(middleware.Recoverer)
 
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: []string{
+		AllowedOrigins: getCSVEnv("ALLOWED_ORIGINS", []string{
 			"http://localhost:5173",
 			"http://127.0.0.1:5173",
-		},
+		}),
 		AllowedMethods: []string{
 			http.MethodGet,
 			http.MethodPost,
@@ -150,11 +159,15 @@ func main() {
 		activityHandler.RegisterRoutes(r)
 	})
 
-	log.Println("server running on :8080")
+	port := getEnv("PORT", "8080")
+	addr := ":" + port
 
-	if err := http.ListenAndServe(":8080", r); err != nil {
+	log.Printf("server running on %s", addr)
+
+	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
+
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +182,41 @@ func mustGetEnv(name string) string {
 	}
 
 	return value
+
+}
+
+func getEnv(name string, fallback string) string {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+
+	return value
+
+}
+
+func getCSVEnv(name string, fallback []string) []string {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	if len(result) == 0 {
+		return fallback
+	}
+
+	return result
+
 }
 
 func getDurationEnv(name string, fallback time.Duration) time.Duration {
@@ -183,4 +231,5 @@ func getDurationEnv(name string, fallback time.Duration) time.Duration {
 	}
 
 	return duration
+
 }
