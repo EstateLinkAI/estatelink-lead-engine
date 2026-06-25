@@ -50,7 +50,7 @@ func main() {
 	listingRepo := postgres.NewListingRepository(db)
 	leadScoreRepo := postgres.NewLeadScoreRepository(db)
 	strategyScoreRepo := postgres.NewPropertyStrategyScoreRepository(db)
-	leadReadRepo := postgres.NewLeadReadRepository(db)
+	leadReadRepo := postgres.NewLeadReadRepository(db, strategyScoreRepo)
 	userRepo := postgres.NewUserRepository(db)
 	rawListingRepo := postgres.NewRawListingRepository(db)
 	importJobRepo := postgres.NewImportJobRepository(db)

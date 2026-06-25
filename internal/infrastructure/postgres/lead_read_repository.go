@@ -12,11 +12,12 @@ import (
 )
 
 type LeadReadRepository struct {
-	db *pgxpool.Pool
+	db                *pgxpool.Pool
+	strategyScoreRepo *PropertyStrategyScoreRepository
 }
 
-func NewLeadReadRepository(db *pgxpool.Pool) *LeadReadRepository {
-	return &LeadReadRepository{db: db}
+func NewLeadReadRepository(db *pgxpool.Pool, strategyScoreRepo *PropertyStrategyScoreRepository) *LeadReadRepository {
+	return &LeadReadRepository{db: db, strategyScoreRepo: strategyScoreRepo}
 }
 
 func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters) ([]lead.ReadModel, error) {
@@ -78,7 +79,33 @@ func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters)
 		return nil, err
 	}
 
+	if err := r.attachStrategyScores(ctx, leads); err != nil {
+		return nil, err
+	}
+
 	return leads, nil
+}
+
+func (r *LeadReadRepository) attachStrategyScores(ctx context.Context, leads []lead.ReadModel) error {
+	if r.strategyScoreRepo == nil || len(leads) == 0 {
+		return nil
+	}
+
+	listingIDs := make([]int64, 0, len(leads))
+	for _, item := range leads {
+		listingIDs = append(listingIDs, item.ListingID)
+	}
+
+	grouped, err := r.strategyScoreRepo.ListByListingIDs(ctx, listingIDs)
+	if err != nil {
+		return err
+	}
+
+	for i := range leads {
+		leads[i].StrategyScores = grouped[leads[i].ListingID]
+	}
+
+	return nil
 }
 
 func (r *LeadReadRepository) GetByID(ctx context.Context, id string) (*lead.ReadModel, error) {
@@ -112,7 +139,12 @@ func (r *LeadReadRepository) GetByID(ctx context.Context, id string) (*lead.Read
 		return nil, err
 	}
 
-	return &item, nil
+	items := []lead.ReadModel{item}
+	if err := r.attachStrategyScores(ctx, items); err != nil {
+		return nil, err
+	}
+
+	return &items[0], nil
 }
 
 type leadScanner interface {

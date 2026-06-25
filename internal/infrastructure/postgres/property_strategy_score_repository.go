@@ -91,3 +91,71 @@ func (r *PropertyStrategyScoreRepository) SaveMany(
 
 	return savedScores, nil
 }
+
+func (r *PropertyStrategyScoreRepository) ListByListingIDs(
+	ctx context.Context,
+	listingIDs []int64,
+) (map[int64][]strategy.StrategyScore, error) {
+	result := make(map[int64][]strategy.StrategyScore)
+
+	if len(listingIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT id, listing_id, strategy, score, grade, reasons, created_at
+		FROM property_strategy_scores
+		WHERE listing_id = ANY($1)
+		ORDER BY listing_id, score DESC
+	`
+
+	rows, err := r.db.Query(ctx, query, listingIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list strategy scores: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item strategy.StrategyScore
+		var strategyName string
+		var reasonsJSON []byte
+
+		if err := rows.Scan(
+			&item.ID,
+			&item.ListingID,
+			&strategyName,
+			&item.Score,
+			&item.Grade,
+			&reasonsJSON,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan strategy score: %w", err)
+		}
+
+		item.Strategy = strategy.Strategy(strategyName)
+
+		if err := json.Unmarshal(reasonsJSON, &item.Reasons); err != nil {
+			return nil, fmt.Errorf("unmarshal strategy score reasons: %w", err)
+		}
+
+		result[item.ListingID] = append(result[item.ListingID], item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate strategy scores: %w", err)
+	}
+
+	return result, nil
+}
+
+func (r *PropertyStrategyScoreRepository) ListByListingID(
+	ctx context.Context,
+	listingID int64,
+) ([]strategy.StrategyScore, error) {
+	grouped, err := r.ListByListingIDs(ctx, []int64{listingID})
+	if err != nil {
+		return nil, err
+	}
+
+	return grouped[listingID], nil
+}
