@@ -7,12 +7,14 @@ import (
 	"os"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
+	"github.com/EstateLinkAI/estatelink-lead-engine/internal/config"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/infrastructure/postgres"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
+	config.LoadEnv()
 	databaseURL := os.Getenv("DATABASE_URL")
 	adminEmail := os.Getenv("ADMIN_EMAIL")
 	adminPassword := os.Getenv("ADMIN_PASSWORD")
