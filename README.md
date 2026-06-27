@@ -1,449 +1,238 @@
 # EstateLink Lead Engine
 
-A production-style Go backend project for ingesting, scoring, ranking, and managing property investment leads.
+A production-style Go backend for ingesting, scoring, and ranking property investment leads at scale.
 
-The system ingests property listings, normalises data, calculates explainable investment opportunity scores, stores results in PostgreSQL, and exposes a secure REST API with JWT authentication and role-based access control.
+It ingests raw property listings (single or bulk JSON), normalises and deduplicates them, runs them through two independent scoring engines — a general **explainable lead score** and per-strategy **investment fit scores** across six strategies (buy-to-let, BRRRR, flip, buy-and-hold, HMO, development) — and exposes the results through a JWT-secured REST API with role-based access control and a full audit trail.
 
----
-
-# Tech Stack
-
-## Backend
-
-- Go
-- Chi Router
-- PostgreSQL
-- pgx / pgxpool
-- Goose migrations
-- JWT authentication
-- bcrypt password hashing
-
-## Tooling
-
-- Docker Compose
-- GitHub Actions
-- Postman
-- PowerShell
+Built to demonstrate clean architecture, concurrent processing, and the kind of operational detail (idempotent imports, cancellable jobs, activity logging) that real production systems need but tutorials usually skip.
 
 ---
 
-# Architecture
+## Highlights
 
-The project follows a clean, production-inspired architecture:
+- **Two scoring engines, not one.** A general explainability-first lead score (0–100, grade A–D, with reasons) plus six strategy-specific scores (buy-to-let, BRRRR, flip, buy-and-hold, HMO, development) computed and stored independently for every listing.
+- **Concurrent, cancellable bulk import.** Bulk JSON imports run as background jobs with a bounded worker pool (16 concurrent workers), live progress tracking, and mid-flight cancellation via context propagation.
+- **Idempotent ingestion.** Re-importing the same source listing updates it in place instead of creating duplicates — enforced at the database layer with unique constraints and `ON CONFLICT` upserts, not just application logic.
+- **Full audit trail.** Logins, listing ingestion, and every import lifecycle event are recorded to an admin-only activity log with actor, metadata, IP, and user agent.
+- **Locked-down auth.** Public registration is hardcoded to the lowest-privilege role; role escalation is only possible through an admin-only endpoint, and there's a CLI for bootstrapping the first admin.
+
+---
+
+## Tech Stack
+
+**Backend:** Go · Chi router · PostgreSQL · pgx / pgxpool · Goose migrations · JWT (`golang-jwt/jwt/v5`) · bcrypt
+
+**Tooling:** Docker Compose · GitHub Actions (CI) · Postman
+
+---
+
+## Architecture
+
+Clean/hexagonal-inspired layering, with domain logic kept independent of HTTP and database concerns:
 
 ```txt
-cmd/api
-internal/application
-internal/domain
-internal/infrastructure
-internal/transport
-migrations
+cmd/
+  api/            entrypoint, router, middleware wiring
+  createadmin/    CLI to bootstrap/promote an admin user
+
+internal/
+  domain/         entities and pure business rules (no I/O)
+    listing/      raw + normalised listing model
+    lead/         explainable score, grade, read model, filters
+    strategy/     6 investment-strategy score models
+    importjob/    bulk import job state machine
+    rawlisting/   raw payload tracking for imports
+    activitylog/  audit log entries
+    user/         account + role model
+
+  application/    use cases that orchestrate domain + infrastructure
+    auth/         register, login, refresh, role updates
+    ingestlisting/    single-listing pipeline: normalise -> score -> persist
+    importlistings/   bulk import orchestration: jobs, concurrency, cancellation
+    scorestrategies/  the 6-strategy scoring engine
+    readleads/        filtered, paginated lead queries
+    logactivity/      audit log writes/reads
+
+  infrastructure/  PostgreSQL repositories, DB connectivity
+  transport/http/  Chi handlers, middleware, request/response shaping
+
+migrations/        Goose SQL migrations
 ```
 
-## Layers
-
-### Domain
-
-Contains core business entities and rules.
-
-Examples:
-
-```txt
-listing
-lead
-user
-```
-
-### Application
-
-Contains business use cases and orchestration logic.
-
-Examples:
-
-```txt
-ingestlisting
-auth
-```
-
-### Infrastructure
-
-External implementations:
-
-```txt
-PostgreSQL repositories
-database connectivity
-```
-
-### Transport
-
-HTTP handlers, middleware, request/response handling.
+**Request flow for ingestion:** `POST /api/listings` → normalise listing → upsert listing → compute lead score → compute 6 strategy scores → persist all → return combined result. Bulk imports run the same pipeline per row, fanned out across a worker pool.
 
 ---
 
-# Features
+## API Endpoints
 
-# Sprint 0 — Foundation ✅
+### Public
 
-Implemented:
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/api/auth/register` | Always creates a `viewer` account, regardless of requested role |
+| `POST` | `/api/auth/login` | Returns access + refresh JWT pair |
+| `POST` | `/api/auth/refresh` | Exchanges a refresh token for a new pair |
 
-- Go module setup
-- Clean project structure
-- Listing domain model
-- Listing normalisation
-- Explainable lead scoring engine
-- PostgreSQL integration
-- Goose migrations
-- Listing persistence
-- Lead score persistence
-- `POST /api/listings`
-- `/health` endpoint
-- Docker Compose setup
-- Automated tests
+### Authenticated (any role)
 
----
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/me` | Current user from JWT claims |
+| `GET` | `/api/leads` | Paginated/filterable leads (city, postcode area, property type, source, min score) |
+| `GET` | `/api/leads/{id}` | Single lead with lead score + all strategy scores |
 
-# Sprint 1 — Auth + Users ✅
+### Admin or Analyst
 
-Implemented:
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/listings` | Ingest a single listing synchronously |
+| `POST` | `/api/imports/clean-listings` | Bulk-import pre-cleaned JSON listings; returns a job ID (202 Accepted) |
+| `GET` | `/api/imports` | List import jobs |
+| `GET` | `/api/imports/{jobId}` | Job status + progress counters |
+| `POST` | `/api/imports/{jobId}/cancel` | Cancel an in-flight import job |
 
-- Users table
-- bcrypt password hashing
-- JWT authentication
-- Register endpoint
-- Login endpoint
-- Auth middleware
-- Role middleware
-- `GET /api/me`
-- Role-based protected routes
+### Admin only
 
-Roles:
+| Method | Path | Notes |
+|---|---|---|
+| `PATCH` | `/api/admin/users/{id}/role` | Promote/change another user's role |
+| `GET` | `/api/activity-logs` | Paginated audit log |
+| `GET` | `/api/activity-logs/{id}` | Single audit log entry |
 
-```txt
-admin
-analyst
-viewer
-```
-
-Protected endpoints:
-
-```txt
-POST /api/listings
-```
-
-Allowed roles:
-
-```txt
-admin
-analyst
-```
+Auth header for protected routes: `Authorization: Bearer <token>`.
 
 ---
 
-# API Endpoints
+## Scoring Engines
 
-## Health
+### Explainable lead score (0–100, grade A–D)
 
-```http
-GET /health
-```
+A single general-purpose score with every contributing factor returned as a `{code, message, points}` reason, so the API response always explains *why* a lead scored the way it did:
 
----
+- Rental yield (up to 25 pts at 8%+)
+- Below-market price (up to 25 pts at 15%+ discount)
+- Seller-motivation keywords in title/description (20 pts — "motivated seller", "quick sale", "chain free", etc.)
+- Days-on-market staleness (up to 15 pts)
+- Data completeness (up to 15 pts)
 
-## Register
+### Strategy fit scores (6 independent scores per listing)
 
-```http
-POST /api/auth/register
-```
+Each strategy starts from its own baseline and applies strategy-specific heuristics over yield, bedroom count, property type, and days on market, producing its own score, grade, and reasons:
 
-Example request:
+| Strategy | Rewards |
+|---|---|
+| `buy_to_let` | Strong yield, 2–4 beds, flat/house |
+| `brrrr` | Yield + long days-on-market (renegotiation potential) + 3+ beds |
+| `flip` | Staleness + house type + 3+ beds |
+| `buy_and_hold` | Usable price data, 2+ beds, known location, moderate yield |
+| `hmo` | 4+ beds heavily, house type, high yield |
+| `development` | Detached/semi-detached, 3+ beds, long market exposure |
 
-```json
-{
-  "email": "admin@estatelink.dev",
-  "password": "Password123!",
-  "role": "admin"
-}
-```
-
----
-
-## Login
-
-```http
-POST /api/auth/login
-```
-
-Example request:
-
-```json
-{
-  "email": "admin@estatelink.dev",
-  "password": "Password123!"
-}
-```
-
-Example response:
-
-```json
-{
-  "token": "jwt-access-token",
-  "accessToken": "jwt-access-token",
-  "refreshToken": "jwt-refresh-token",
-  "user": {
-    "id": "uuid",
-    "email": "admin@estatelink.dev",
-    "role": "admin"
-  }
-}
-```
-
-`token` is a backwards-compatible alias of `accessToken`.
+Both engines run inline on every ingest and are stored independently, so strategy scores can be recomputed or extended without touching the general lead score.
 
 ---
 
-## Refresh Token
+## Bulk Import Pipeline
 
-```http
-POST /api/auth/refresh
-```
+`POST /api/imports/clean-listings` accepts an array of pre-cleaned listing JSON and processes it as a background job:
 
-Example request:
-
-```json
-{
-  "refreshToken": "jwt-refresh-token"
-}
-```
-
-Example response:
-
-```json
-{
-  "token": "jwt-access-token",
-  "accessToken": "jwt-access-token",
-  "refreshToken": "jwt-refresh-token",
-  "user": {
-    "id": "uuid",
-    "email": "admin@estatelink.dev",
-    "role": "admin"
-  }
-}
-```
+- **Concurrency** — a bounded worker pool (16 concurrent workers) processes rows in parallel against a pool sized for it (`pgxpool` max 25 connections).
+- **Cancellation** — each job owns a `context.CancelFunc`; `POST /api/imports/{jobId}/cancel` cancels it, in-flight work finishes naturally, and no new rows are dispatched.
+- **Dedup / idempotency** — enforced in the database, not just application code: unique constraints on `(source, external_property_id)` for raw listings, `(source_platform, external_property_id)` for listings, and one row per `listing_id` for lead scores, with repositories using `ON CONFLICT` upserts. Re-importing the same listing updates it instead of duplicating it.
+- **Partial failure tolerance** — a bad row increments the job's failed count without aborting the batch; the job only fails outright if every row fails.
+- **Auditing** — `import.started` / `import.completed` / `import.failed` / `import.cancelled` events are written to the activity log with row counts and job metadata.
 
 ---
 
-## Current User
+## Auth & Access Control
 
-```http
-GET /api/me
-```
-
-Requires:
-
-```txt
-Authorization: Bearer <token>
-```
+- JWT (HS256) access + refresh token pairs, configurable TTLs.
+- Roles: `admin`, `analyst`, `viewer` — enforced both by a DB check constraint and by route middleware.
+- Public registration always creates a `viewer` — there is no way to self-elevate through the API.
+- Role changes only happen through the admin-only `PATCH /api/admin/users/{id}/role` endpoint, and take effect on the user's next token refresh.
+- `go run ./cmd/createadmin` bootstraps the first admin (or promotes an existing user by email) from `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars — no manual SQL required to get started.
 
 ---
 
-## Ingest Listing
+## Activity Logging
 
-```http
-POST /api/listings
-```
-
-Requires:
-
-```txt
-Authorization: Bearer <token>
-```
-
-Allowed roles:
-
-```txt
-admin
-analyst
-```
+Every login, manual listing ingestion, and import lifecycle event is written to an append-only `activity_log` table (actor, action, entity type/id, JSONB metadata, IP, user agent). Logging is best-effort — a logging failure never blocks the action it's recording — and the log is only readable by admins via `/api/activity-logs`.
 
 ---
 
-# Running Locally
-
-## Start PostgreSQL
+## Running Locally
 
 ```bash
+# 1. Start PostgreSQL
 docker compose up -d
-```
 
----
+# 2. Run migrations
+goose -dir migrations postgres "$DATABASE_URL" up
 
-## Run migrations
+# 3. Bootstrap an admin user
+ADMIN_EMAIL=<your-email> ADMIN_PASSWORD=<your-password> go run ./cmd/createadmin
 
-```bash
-goose -dir migrations postgres "postgres://estatelink:estatelink_local_dev@localhost:5433/estatelink?sslmode=disable" up
-```
-
----
-
-## Start API
-
-```bash
+# 4. Start the API
 go run ./cmd/api
 ```
 
----
+### Environment Variables
 
-# Environment Variable
-
-Required:
+Required (see `.env.example`):
 
 ```txt
-DATABASE_URL
-JWT_SECRET
-```
-
-Example:
-
-```txt
-postgres://estatelink:estatelink_local_dev@localhost:5433/estatelink?sslmode=disable
+DATABASE_URL=postgres://<user>:<password>@localhost:5432/<db>?sslmode=disable
+JWT_SECRET=<long-random-secret>
 ```
 
 Optional:
 
 ```txt
-ACCESS_TOKEN_TTL=24h
-REFRESH_TOKEN_TTL=168h
+ACCESS_TOKEN_TTL=24h        # default 24h
+REFRESH_TOKEN_TTL=168h      # default 168h (7 days)
+PORT=8080                   # default 8080
+ALLOWED_ORIGINS=http://localhost:5173   # CSV list for CORS
+ENV_FILE=.env.staging       # load a specific env file instead of .env
 ```
+
+`ENV_FILE` lets you point at any env file (`.env.staging`, `.env.production.local`, ...) without changing code — useful for running the same binary against multiple environments.
 
 ---
 
-# Running Tests
+## Testing
 
 ```bash
 go test ./...
 ```
 
----
-
-# CI/CD
-
-GitHub Actions automatically runs:
-
-```bash
-go test ./...
-```
-
-on:
-
-- push
-- pull request
+Unit tests cover the auth service and token issuance, the listing ingestion pipeline, lead and strategy scoring, listing normalisation, lead read filtering, and the auth middleware.
 
 ---
 
-# Postman
+## CI/CD
 
-The API is tested through Postman collections covering:
-
-- authentication
-- role protection
-- listing ingestion
-- negative authorization scenarios
+GitHub Actions (`.github/workflows/test.yml`) runs `go test ./...` on every push and pull request.
 
 ---
 
-# Roadmap
+## Deployment
 
-## Sprint 2 — Lead Read API
-
-Planned:
-
-- `GET /api/leads`
-- `GET /api/leads/{id}`
-- pagination
-- score ranking
-- filters
-- score reasons
-
-## Sprint 3 — Elite Search
-
-Planned filters:
-
-- city
-- postcode area
-- property type
-- price range
-- bedrooms
-- score
-- yield
-- days on market
-
-## Sprint 4 — Score History
-
-- rescoring
-- score history tracking
-- grade change detection
-
-## Sprint 5 — Event Log System
-
-- event logs
-- lead lifecycle events
-- event feed API
-
-## Sprint 6 — CSV Import Pipeline
-
-- CSV ingestion
-- validation
-- batch processing
-- import reporting
-
-## Sprint 7 — Observability
-
-- structured logging
-- metrics
-- panic recovery
-- request IDs
-- DB health checks
-
-## Sprint 8 — Frontend Dashboard
-
-- authentication UI
-- lead dashboard
-- search UI
-- event feed
-
-## Sprint 9 — Production Add-ons
-
-- RabbitMQ
-- Redis
-- Prometheus
-- OpenTelemetry
-- gRPC
-- CI/CD pipeline improvements
+A multi-stage `Dockerfile` (Go builder → Alpine runtime) builds a minimal production image of the API. `docker-compose.yml` covers local development with hot reload; a production compose file is scaffolded but not yet filled in.
 
 ---
 
-# Known Future Improvements
+## Known Limitations / Next Up
 
-- Public registration should default to `viewer`
-- Admin-only role promotion endpoint
-- Rate limiting
-- Structured audit logging
-- OpenAPI / Swagger documentation
-- Full integration testing
-- Dockerised production deployment
+- `docker-compose-prod.yml` is a stub — no production compose/orchestration yet.
+- No rate limiting or structured metrics/tracing (logging is plain stdout, no Prometheus/OpenTelemetry).
+- No OpenAPI/Swagger spec — API is documented here and via the Postman collection.
+- `property_images` has a domain model and schema but no API surface yet.
+- `development` strategy scoring is intentionally limited until plot size and planning data are available.
+- Go version is pinned to 1.25 in the Dockerfile but 1.24 in CI — worth aligning.
 
 ---
 
-# Goal of the Project
+## Why This Project
 
-The purpose of this project is to demonstrate:
-
-- backend engineering fundamentals
-- clean architecture
-- production-style API design
-- authentication and authorization
-- PostgreSQL integration
-- testing practices
-- scalable service structure
-- DevOps awareness
-- real-world backend patterns
+Built to practice and demonstrate the parts of backend engineering that go beyond CRUD: explainable scoring logic, concurrent job processing with cancellation, idempotent data ingestion, role-based access control done defensively (no client-side trust for privilege), and an audit trail that would actually hold up in a real production incident review.
