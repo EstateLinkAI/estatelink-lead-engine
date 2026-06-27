@@ -8,3 +8,7 @@ tmp/
 .vscode/
 .idea/
 db_schema.sql
+.env.*
+!.env.example
+*.local
+*.json
