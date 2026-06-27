@@ -36,7 +36,18 @@ func main() {
 
 	ctx := context.Background()
 
-	db, err := pgxpool.New(ctx, databaseURL)
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		log.Fatalf("failed to parse database url: %v", err)
+	}
+
+	// Bulk imports process listings concurrently (see importlistings.UseCase),
+	// so the pool needs enough headroom for those workers plus normal API traffic.
+	if poolConfig.MaxConns < 25 {
+		poolConfig.MaxConns = 25
+	}
+
+	db, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
@@ -146,7 +157,9 @@ func main() {
 		listingHandler.RegisterRoutes(r)
 
 		r.Post("/api/imports/clean-listings", importHandler.ImportCleanListings)
+		r.Get("/api/imports", importHandler.ListImportJobs)
 		r.Get("/api/imports/{jobId}", importHandler.GetImportJob)
+		r.Post("/api/imports/{jobId}/cancel", importHandler.CancelImportJob)
 	})
 
 	// Admin-only routes

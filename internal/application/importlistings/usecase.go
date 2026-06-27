@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
@@ -25,11 +26,13 @@ type RawListingRepository interface {
 type ImportJobRepository interface {
 	Create(ctx context.Context, totalCount int) (importjob.ImportJob, error)
 	GetByID(ctx context.Context, id string) (importjob.ImportJob, error)
+	List(ctx context.Context, limit int) ([]importjob.ImportJob, error)
 	MarkProcessing(ctx context.Context, id string) error
 	IncrementProcessed(ctx context.Context, id string) error
 	IncrementFailed(ctx context.Context, id string) error
 	MarkCompleted(ctx context.Context, id string) error
 	MarkFailed(ctx context.Context, id string, reason string) error
+	MarkCancelled(ctx context.Context, id string) error
 }
 
 type ListingIngester interface {
@@ -41,6 +44,9 @@ type UseCase struct {
 	importJobs     ImportJobRepository
 	ingester       ListingIngester
 	activityLogger ActivityLogger
+
+	cancelFnsMu sync.Mutex
+	cancelFns   map[string]context.CancelFunc
 }
 
 type ActivityLogger interface {
@@ -65,6 +71,7 @@ func NewUseCase(
 		importJobs:     importJobs,
 		ingester:       ingester,
 		activityLogger: activityLogger,
+		cancelFns:      make(map[string]context.CancelFunc),
 	}
 }
 
@@ -120,7 +127,10 @@ func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.R
 		UserAgent: activityCtx.UserAgent,
 	})
 
-	go u.processImportJob(context.Background(), job.ID, payloadCopy, activityCtx)
+	jobCtx, cancel := context.WithCancel(context.Background())
+	u.setCancelFunc(job.ID, cancel)
+
+	go u.processImportJob(jobCtx, job.ID, payloadCopy, activityCtx)
 
 	return StartImportResult{
 		JobID:  job.ID,
@@ -133,20 +143,113 @@ func (u *UseCase) GetImportJob(ctx context.Context, id string) (importjob.Import
 	return u.importJobs.GetByID(ctx, id)
 }
 
+func (u *UseCase) ListImportJobs(ctx context.Context, limit int) ([]importjob.ImportJob, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	return u.importJobs.List(ctx, limit)
+}
+
+// CancelImportJob signals the running goroutine for jobID (if this server
+// process is the one running it) to stop processing further listings, and
+// marks the job cancelled unless it has already reached a terminal state.
+func (u *UseCase) CancelImportJob(ctx context.Context, id string) (importjob.ImportJob, error) {
+	if cancel := u.takeCancelFunc(id); cancel != nil {
+		cancel()
+	}
+
+	if err := u.importJobs.MarkCancelled(ctx, id); err != nil {
+		return importjob.ImportJob{}, err
+	}
+
+	return u.importJobs.GetByID(ctx, id)
+}
+
+func (u *UseCase) setCancelFunc(jobID string, cancel context.CancelFunc) {
+	u.cancelFnsMu.Lock()
+	defer u.cancelFnsMu.Unlock()
+	u.cancelFns[jobID] = cancel
+}
+
+func (u *UseCase) takeCancelFunc(jobID string) context.CancelFunc {
+	u.cancelFnsMu.Lock()
+	defer u.cancelFnsMu.Unlock()
+	cancel := u.cancelFns[jobID]
+	return cancel
+}
+
+func (u *UseCase) clearCancelFunc(jobID string) {
+	u.cancelFnsMu.Lock()
+	defer u.cancelFnsMu.Unlock()
+	delete(u.cancelFns, jobID)
+}
+
+// importConcurrency bounds how many listings are processed in parallel per
+// job. Each listing does a handful of sequential round trips (save raw
+// listing, upsert listing, upsert score, upsert strategy scores), so this is
+// tuned to keep the pool busy without exhausting it alongside normal API
+// traffic - see pgxpool.MaxConns in cmd/api/main.go.
+const importConcurrency = 16
+
+// processPayloadConcurrently runs processOne for each raw listing using a
+// bounded worker pool, stopping new dispatches once ctx is cancelled. Work
+// already in flight is allowed to finish so counts stay accurate.
+func (u *UseCase) processPayloadConcurrently(ctx context.Context, jobID string, payload []json.RawMessage) {
+	sem := make(chan struct{}, importConcurrency)
+	var wg sync.WaitGroup
+
+	for _, raw := range payload {
+		if ctx.Err() != nil {
+			break
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+
+		go func(raw json.RawMessage) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			if err := u.processOne(ctx, jobID, raw); err != nil {
+				_ = u.importJobs.IncrementFailed(ctx, jobID)
+				return
+			}
+
+			_ = u.importJobs.IncrementProcessed(ctx, jobID)
+		}(raw)
+	}
+
+	wg.Wait()
+}
+
 func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []json.RawMessage, activityCtx ActivityContext) {
+	defer u.clearCancelFunc(jobID)
+
 	if err := u.importJobs.MarkProcessing(ctx, jobID); err != nil {
 		_ = u.importJobs.MarkFailed(ctx, jobID, err.Error())
 		u.logImportFailure(ctx, jobID, activityCtx, err.Error())
 		return
 	}
 
-	for _, raw := range payload {
-		if err := u.processOne(ctx, jobID, raw); err != nil {
-			_ = u.importJobs.IncrementFailed(ctx, jobID)
-			continue
-		}
+	u.processPayloadConcurrently(ctx, jobID, payload)
 
-		_ = u.importJobs.IncrementProcessed(ctx, jobID)
+	if ctx.Err() != nil {
+		u.logActivityBestEffort(context.Background(), activitylog.ActivityLog{
+			ActorUserID: activityCtx.ActorUserID,
+			Action:      "import.cancelled",
+			EntityType:  "import_job",
+			Metadata: buildImportMetadata(
+				activityCtx.Filename,
+				map[string]interface{}{
+					"import_type": "clean_listings",
+					"job_id":      jobID,
+				},
+			),
+			IPAddress: activityCtx.IPAddress,
+			UserAgent: activityCtx.UserAgent,
+		})
+		return
 	}
 
 	job, err := u.importJobs.GetByID(ctx, jobID)
