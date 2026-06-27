@@ -15,6 +15,10 @@ func NewListingRepository(db *pgxpool.Pool) *ListingRepository {
 	return &ListingRepository{db: db}
 }
 
+// Create upserts a listing. When the scraper supplies an external property
+// ID, re-importing the same (source_platform, external_property_id) pair
+// updates the existing row instead of inserting a duplicate; listings
+// without an external ID (legacy/manual imports) always insert a new row.
 func (r *ListingRepository) Create(ctx context.Context, l listing.Listing) (listing.Listing, error) {
 	query := `
 		INSERT INTO listings (
@@ -31,12 +35,29 @@ func (r *ListingRepository) Create(ctx context.Context, l listing.Listing) (list
 			market_price_estimate,
 			days_on_market,
 			source_platform,
-			source_url
+			source_url,
+			external_property_id
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14
+			$8, $9, $10, $11, $12, $13, $14, $15
 		)
+		ON CONFLICT (source_platform, external_property_id) WHERE external_property_id <> ''
+		DO UPDATE SET
+			title = EXCLUDED.title,
+			description = EXCLUDED.description,
+			price = EXCLUDED.price,
+			city = EXCLUDED.city,
+			postcode = EXCLUDED.postcode,
+			postcode_area = EXCLUDED.postcode_area,
+			property_type = EXCLUDED.property_type,
+			bedrooms = EXCLUDED.bedrooms,
+			bathrooms = EXCLUDED.bathrooms,
+			rental_estimate = EXCLUDED.rental_estimate,
+			market_price_estimate = EXCLUDED.market_price_estimate,
+			days_on_market = EXCLUDED.days_on_market,
+			source_url = EXCLUDED.source_url,
+			updated_at = NOW()
 		RETURNING id, created_at, updated_at;
 	`
 
@@ -57,6 +78,7 @@ func (r *ListingRepository) Create(ctx context.Context, l listing.Listing) (list
 		l.DaysOnMarket,
 		l.SourcePlatform,
 		l.SourceURL,
+		l.ExternalPropertyID,
 	).Scan(&l.ID, &l.CreatedAt, &l.UpdatedAt)
 
 	if err != nil {

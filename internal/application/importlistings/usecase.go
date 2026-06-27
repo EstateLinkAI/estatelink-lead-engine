@@ -363,6 +363,7 @@ func mapCleanListingToDomain(input cleanListingInput) listing.Listing {
 		DaysOnMarket:        calculateDaysOnMarket(input.DateAdded),
 		SourcePlatform:      input.Source,
 		SourceURL:           input.URL,
+		ExternalPropertyID:  input.PropertyID,
 	}
 }
 
