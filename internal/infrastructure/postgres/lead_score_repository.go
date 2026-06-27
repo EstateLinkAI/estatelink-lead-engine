@@ -22,6 +22,8 @@ func (r *LeadScoreRepository) Create(ctx context.Context, score lead.Score) (lea
 		return lead.Score{}, err
 	}
 
+	// Upsert on listing_id so re-importing/re-scoring a listing replaces its
+	// score in place instead of accumulating duplicate rows.
 	query := `
 		INSERT INTO lead_scores (
 			listing_id,
@@ -30,6 +32,12 @@ func (r *LeadScoreRepository) Create(ctx context.Context, score lead.Score) (lea
 			reasons
 		)
 		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (listing_id)
+		DO UPDATE SET
+			score = EXCLUDED.score,
+			grade = EXCLUDED.grade,
+			reasons = EXCLUDED.reasons,
+			created_at = NOW()
 		RETURNING created_at;
 	`
 

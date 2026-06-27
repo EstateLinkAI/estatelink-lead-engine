@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -73,4 +74,46 @@ func (h *ImportHandler) GetImportJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (h *ImportHandler) CancelImportJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "jobId")
+	if jobID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "job id is required",
+		})
+		return
+	}
+
+	job, err := h.useCase.CancelImportJob(r.Context(), jobID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (h *ImportHandler) ListImportJobs(w http.ResponseWriter, r *http.Request) {
+	limit := 20
+
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil {
+			limit = parsed
+		}
+	}
+
+	jobs, err := h.useCase.ListImportJobs(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobs": jobs,
+	})
 }

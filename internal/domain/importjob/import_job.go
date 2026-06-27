@@ -20,4 +20,5 @@ const (
 	StatusProcessing = "processing"
 	StatusCompleted  = "completed"
 	StatusFailed     = "failed"
+	StatusCancelled  = "cancelled"
 )

@@ -18,6 +18,7 @@ type Listing struct {
 	DaysOnMarket        int       `json:"daysOnMarket"`
 	SourcePlatform      string    `json:"sourcePlatform"`
 	SourceURL           string    `json:"sourceUrl"`
+	ExternalPropertyID  string    `json:"externalPropertyId"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
 }

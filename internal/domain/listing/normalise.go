@@ -14,6 +14,9 @@ func Normalise(l Listing) Listing {
 
 	l.PostcodeArea = ExtractPostcodeArea(l.Postcode)
 
+	l.SourcePlatform = strings.TrimSpace(l.SourcePlatform)
+	l.ExternalPropertyID = strings.TrimSpace(l.ExternalPropertyID)
+
 	return l
 }
 
