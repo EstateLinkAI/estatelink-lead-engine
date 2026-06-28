@@ -11,7 +11,7 @@ Built to demonstrate clean architecture, concurrent processing, and the kind of 
 ## Highlights
 
 - **Two scoring engines, not one.** A general explainability-first lead score (0–100, grade A–D, with reasons) plus six strategy-specific scores (buy-to-let, BRRRR, flip, buy-and-hold, HMO, development) computed and stored independently for every listing.
-- **Concurrent, cancellable bulk import.** Bulk JSON imports run as background jobs with a bounded worker pool (16 concurrent workers), live progress tracking, and mid-flight cancellation via context propagation.
+- **Concurrent, cancellable bulk import.** Bulk JSON imports run as background jobs with a bounded worker pool (`IMPORT_WORKERS`, default 4 concurrent workers), live progress tracking, and mid-flight cancellation via context propagation.
 - **Idempotent ingestion.** Re-importing the same source listing updates it in place instead of creating duplicates — enforced at the database layer with unique constraints and `ON CONFLICT` upserts, not just application logic.
 - **Full audit trail.** Logins, listing ingestion, and every import lifecycle event are recorded to an admin-only activity log with actor, metadata, IP, and user agent.
 - **Locked-down auth.** Public registration is hardcoded to the lowest-privilege role; role escalation is only possible through an admin-only endpoint, and there's a CLI for bootstrapping the first admin.
@@ -137,7 +137,8 @@ Both engines run inline on every ingest and are stored independently, so strateg
 
 `POST /api/imports/clean-listings` accepts an array of pre-cleaned listing JSON and processes it as a background job:
 
-- **Concurrency** — a bounded worker pool (16 concurrent workers) processes rows in parallel against a pool sized for it (`pgxpool` max 25 connections).
+- **Request safety limits** — the request body is capped at `MAX_REQUEST_BODY_BYTES` (413 if exceeded) and the row count is capped at `MAX_IMPORT_ROWS` (400 if exceeded). Both checks happen before an `import_jobs` row is created or any raw listing is written, so an oversized import leaves no trace in the database.
+- **Concurrency** — a bounded worker pool (`IMPORT_WORKERS`, default 4) processes rows in parallel against a pool sized for it (`pgxpool` max 25 connections).
 - **Cancellation** — each job owns a `context.CancelFunc`; `POST /api/imports/{jobId}/cancel` cancels it, in-flight work finishes naturally, and no new rows are dispatched.
 - **Dedup / idempotency** — enforced in the database, not just application code: unique constraints on `(source, external_property_id)` for raw listings, `(source_platform, external_property_id)` for listings, and one row per `listing_id` for lead scores, with repositories using `ON CONFLICT` upserts. Re-importing the same listing updates it instead of duplicating it.
 - **Partial failure tolerance** — a bad row increments the job's failed count without aborting the batch; the job only fails outright if every row fails.
@@ -194,6 +195,9 @@ REFRESH_TOKEN_TTL=168h      # default 168h (7 days)
 PORT=8080                   # default 8080
 ALLOWED_ORIGINS=http://localhost:5173   # CSV list for CORS
 ENV_FILE=.env.staging       # load a specific env file instead of .env
+MAX_IMPORT_ROWS=5000            # default 5000; rows over this are rejected with 400 before any DB write
+MAX_REQUEST_BODY_BYTES=25000000 # default 25,000,000 bytes (~25MB); bodies over this are rejected with 413
+IMPORT_WORKERS=4                 # default 4; bounded worker pool size for bulk import processing
 ```
 
 `ENV_FILE` lets you point at any env file (`.env.staging`, `.env.production.local`, ...) without changing code — useful for running the same binary against multiple environments.
@@ -206,7 +210,9 @@ ENV_FILE=.env.staging       # load a specific env file instead of .env
 go test ./...
 ```
 
-Unit tests cover the auth service and token issuance, the listing ingestion pipeline, lead and strategy scoring, listing normalisation, lead read filtering, and the auth middleware.
+Unit tests cover the auth service and token issuance, the listing ingestion pipeline, lead and strategy scoring, listing normalisation, lead read filtering, the auth middleware, and the bulk import safety limits (row count and request body size).
+
+`scripts/smoke-staging.sh` runs a black-box smoke test against a deployed environment: health check, login, a small successful import, job listing/lookup, and an oversized import rejection. Requires `STAGING_URL`, `STAGING_EMAIL`, `STAGING_PASSWORD`.
 
 ---
 

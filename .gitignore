@@ -12,3 +12,4 @@ db_schema.sql
 !.env.example
 *.local
 *.json
+*.ndjson

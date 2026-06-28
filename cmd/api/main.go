@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,13 @@ func main() {
 
 	accessTokenTTL := getDurationEnv("ACCESS_TOKEN_TTL", 24*time.Hour)
 	refreshTokenTTL := getDurationEnv("REFRESH_TOKEN_TTL", 7*24*time.Hour)
+
+	// Import safety limits - see internal/application/importlistings.UseCase
+	// and internal/transport/http.ImportHandler. These exist to bound memory
+	// usage for bulk imports after a 368k-row import crashed staging.
+	maxImportRows := getIntEnv("MAX_IMPORT_ROWS", 5000)
+	maxRequestBodyBytes := getIntEnv("MAX_REQUEST_BODY_BYTES", 25000000)
+	importWorkers := getIntEnv("IMPORT_WORKERS", 4)
 
 	ctx := context.Background()
 
@@ -91,13 +99,15 @@ func main() {
 		importJobRepo,
 		ingestUseCase,
 		activityService,
+		maxImportRows,
+		importWorkers,
 	)
 
 	// Handlers
 	listingHandler := httptransport.NewListingHandler(ingestUseCase, activityService)
 	leadHandler := httptransport.NewLeadHandler(readLeadsUseCase)
 	authHandler := httptransport.NewAuthHandler(authService, activityService)
-	importHandler := httptransport.NewImportHandler(importListingsUseCase)
+	importHandler := httptransport.NewImportHandler(importListingsUseCase, int64(maxRequestBodyBytes))
 	activityHandler := httptransport.NewActivityLogHandler(activityService)
 
 	// Router
@@ -229,6 +239,21 @@ func getCSVEnv(name string, fallback []string) []string {
 	}
 
 	return result
+
+}
+
+func getIntEnv(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Fatalf("%s must be an integer, got %q: %v", name, value, err)
+	}
+
+	return parsed
 
 }
 

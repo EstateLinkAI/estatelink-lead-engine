@@ -44,10 +44,42 @@ type UseCase struct {
 	importJobs     ImportJobRepository
 	ingester       ListingIngester
 	activityLogger ActivityLogger
+	maxImportRows  int
+	importWorkers  int
 
 	cancelFnsMu sync.Mutex
 	cancelFns   map[string]context.CancelFunc
 }
+
+// ErrImportTooLarge is the sentinel wrapped by ImportTooLargeError, for
+// callers that only need errors.Is. It is checked before the import job is
+// created, so an oversized import never creates an import_jobs row or
+// writes any raw listings.
+var ErrImportTooLarge = errors.New("import payload exceeds maximum allowed rows")
+
+// ImportTooLargeError carries the row counts needed to build a clear 400
+// response (see ImportHandler.ImportCleanListings), while still satisfying
+// errors.Is(err, ErrImportTooLarge) via Unwrap.
+type ImportTooLargeError struct {
+	MaxRows      int
+	ReceivedRows int
+}
+
+func (e *ImportTooLargeError) Error() string {
+	return fmt.Sprintf("%s: got %d rows, limit is %d", ErrImportTooLarge, e.ReceivedRows, e.MaxRows)
+}
+
+func (e *ImportTooLargeError) Unwrap() error {
+	return ErrImportTooLarge
+}
+
+// defaultImportWorkers and defaultMaxImportRows are used when NewUseCase is
+// given a non-positive value, so callers (and existing tests) that don't
+// care about these limits still get sane behaviour.
+const (
+	defaultImportWorkers = 4
+	defaultMaxImportRows = 5000
+)
 
 type ActivityLogger interface {
 	Log(ctx context.Context, log activitylog.ActivityLog) error
@@ -65,12 +97,24 @@ func NewUseCase(
 	importJobs ImportJobRepository,
 	ingester ListingIngester,
 	activityLogger ActivityLogger,
+	maxImportRows int,
+	importWorkers int,
 ) *UseCase {
+	if maxImportRows <= 0 {
+		maxImportRows = defaultMaxImportRows
+	}
+
+	if importWorkers <= 0 {
+		importWorkers = defaultImportWorkers
+	}
+
 	return &UseCase{
 		rawListings:    rawListings,
 		importJobs:     importJobs,
 		ingester:       ingester,
 		activityLogger: activityLogger,
+		maxImportRows:  maxImportRows,
+		importWorkers:  importWorkers,
 		cancelFns:      make(map[string]context.CancelFunc),
 	}
 }
@@ -102,6 +146,10 @@ type cleanListingInput struct {
 func (u *UseCase) StartCleanListingsImport(ctx context.Context, payload []json.RawMessage, activityCtx ActivityContext) (StartImportResult, error) {
 	if len(payload) == 0 {
 		return StartImportResult{}, errors.New("import payload cannot be empty")
+	}
+
+	if len(payload) > u.maxImportRows {
+		return StartImportResult{}, &ImportTooLargeError{MaxRows: u.maxImportRows, ReceivedRows: len(payload)}
 	}
 
 	job, err := u.importJobs.Create(ctx, len(payload))
@@ -185,18 +233,16 @@ func (u *UseCase) clearCancelFunc(jobID string) {
 	delete(u.cancelFns, jobID)
 }
 
-// importConcurrency bounds how many listings are processed in parallel per
-// job. Each listing does a handful of sequential round trips (save raw
-// listing, upsert listing, upsert score, upsert strategy scores), so this is
-// tuned to keep the pool busy without exhausting it alongside normal API
-// traffic - see pgxpool.MaxConns in cmd/api/main.go.
-const importConcurrency = 16
-
 // processPayloadConcurrently runs processOne for each raw listing using a
-// bounded worker pool, stopping new dispatches once ctx is cancelled. Work
-// already in flight is allowed to finish so counts stay accurate.
+// bounded worker pool (sized by u.importWorkers, see IMPORT_WORKERS), stopping
+// new dispatches once ctx is cancelled. Work already in flight is allowed to
+// finish so counts stay accurate. Each listing does a handful of sequential
+// round trips (save raw listing, upsert listing, upsert score, upsert
+// strategy scores), so the worker count is tuned to keep the pool busy
+// without exhausting it alongside normal API traffic - see pgxpool.MaxConns
+// in cmd/api/main.go.
 func (u *UseCase) processPayloadConcurrently(ctx context.Context, jobID string, payload []json.RawMessage) {
-	sem := make(chan struct{}, importConcurrency)
+	sem := make(chan struct{}, u.importWorkers)
 	var wg sync.WaitGroup
 
 	for _, raw := range payload {
