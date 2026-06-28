@@ -20,7 +20,28 @@ func NewLeadReadRepository(db *pgxpool.Pool, strategyScoreRepo *PropertyStrategy
 	return &LeadReadRepository{db: db, strategyScoreRepo: strategyScoreRepo}
 }
 
-func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters) ([]lead.ReadModel, error) {
+const leadFilterWhereClause = `
+	($1 = '' OR LOWER(l.city) = LOWER($1))
+	AND ($2 = '' OR LOWER(l.postcode_area) = LOWER($2))
+	AND ($3 = '' OR LOWER(l.property_type) = LOWER($3))
+	AND ($4 = '' OR LOWER(l.source_platform) = LOWER($4))
+	AND ($5::int IS NULL OR ls.score >= $5)
+`
+
+func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters) (lead.ListResult, error) {
+	filterArgs := []any{
+		filters.City,
+		filters.PostcodeArea,
+		filters.PropertyType,
+		filters.SourcePlatform,
+		filters.MinScore,
+	}
+
+	total, err := r.count(ctx, filterArgs)
+	if err != nil {
+		return lead.ListResult{}, err
+	}
+
 	query := `
 		SELECT
 			ls.id,
@@ -38,29 +59,18 @@ func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters)
 			ls.reasons
 		FROM lead_scores ls
 		INNER JOIN listings l ON l.id = ls.listing_id
-		WHERE
-			($1 = '' OR LOWER(l.city) = LOWER($1))
-			AND ($2 = '' OR LOWER(l.postcode_area) = LOWER($2))
-			AND ($3 = '' OR LOWER(l.property_type) = LOWER($3))
-			AND ($4 = '' OR LOWER(l.source_platform) = LOWER($4))
-			AND ($5::int IS NULL OR ls.score >= $5)
-		ORDER BY ls.score DESC, ls.created_at DESC
+		WHERE ` + leadFilterWhereClause + `
+		ORDER BY ls.score DESC, ls.created_at DESC, ls.id DESC
 		LIMIT $6 OFFSET $7;
 	`
 
 	rows, err := r.db.Query(
 		ctx,
 		query,
-		filters.City,
-		filters.PostcodeArea,
-		filters.PropertyType,
-		filters.SourcePlatform,
-		filters.MinScore,
-		filters.Limit,
-		filters.Offset,
+		append(filterArgs, filters.Limit, filters.Offset)...,
 	)
 	if err != nil {
-		return nil, err
+		return lead.ListResult{}, err
 	}
 	defer rows.Close()
 
@@ -69,21 +79,37 @@ func (r *LeadReadRepository) List(ctx context.Context, filters lead.ListFilters)
 	for rows.Next() {
 		item, err := scanLeadReadModel(rows)
 		if err != nil {
-			return nil, err
+			return lead.ListResult{}, err
 		}
 
 		leads = append(leads, item)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return lead.ListResult{}, err
 	}
 
 	if err := r.attachStrategyScores(ctx, leads); err != nil {
-		return nil, err
+		return lead.ListResult{}, err
 	}
 
-	return leads, nil
+	return lead.ListResult{Items: leads, Total: total}, nil
+}
+
+func (r *LeadReadRepository) count(ctx context.Context, filterArgs []any) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM lead_scores ls
+		INNER JOIN listings l ON l.id = ls.listing_id
+		WHERE ` + leadFilterWhereClause + `;
+	`
+
+	var total int
+	if err := r.db.QueryRow(ctx, query, filterArgs...).Scan(&total); err != nil {
+		return 0, err
+	}
+
+	return total, nil
 }
 
 func (r *LeadReadRepository) attachStrategyScores(ctx context.Context, leads []lead.ReadModel) error {
