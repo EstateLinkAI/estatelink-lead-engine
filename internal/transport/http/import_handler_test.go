@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/importlistings"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/application/ingestlisting"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/importjob"
@@ -83,16 +85,34 @@ func (r *stubImportJobRepo) List(ctx context.Context, limit int) ([]importjob.Im
 
 func (r *stubImportJobRepo) MarkProcessing(ctx context.Context, id string) error { return nil }
 
-func (r *stubImportJobRepo) IncrementProcessed(ctx context.Context, id string) error { return nil }
+func (r *stubImportJobRepo) IncrementProcessed(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.job.ProcessedCount++
+	return nil
+}
 
-func (r *stubImportJobRepo) IncrementFailed(ctx context.Context, id string) error { return nil }
+func (r *stubImportJobRepo) IncrementFailed(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.job.FailedCount++
+	return nil
+}
 
 func (r *stubImportJobRepo) MarkCompleted(ctx context.Context, id string) error {
+	r.mu.Lock()
+	r.job.Status = importjob.StatusCompleted
+	r.mu.Unlock()
 	close(r.done)
 	return nil
 }
 
 func (r *stubImportJobRepo) MarkFailed(ctx context.Context, id string, reason string) error {
+	r.mu.Lock()
+	r.job.Status = importjob.StatusFailed
+	msg := reason
+	r.job.ErrorMessage = &msg
+	r.mu.Unlock()
 	close(r.done)
 	return nil
 }
@@ -231,5 +251,59 @@ func TestImportCleanListingsRejectsOversizedBody(t *testing.T) {
 
 	if resp["maxBytes"] != float64(16) {
 		t.Fatalf("expected maxBytes 16, got %v", resp["maxBytes"])
+	}
+}
+
+func TestImportJobDetailExposesUsefulFailureSummaryWhenAllRowsFail(t *testing.T) {
+	handler, _, jobRepo := newTestImportHandler(10, 1024*1024)
+
+	body := `[
+		{"source":"zillow","property_id":"p1","price_val":3.62},
+		{"source":"zillow","property_id":"p2","price_val":1.1}
+	]`
+	req := authedImportRequest(body)
+	rec := httptest.NewRecorder()
+
+	handler.ImportCleanListings(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	jobRepo.waitDone(t)
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/imports/job-1", nil)
+	detailRec := httptest.NewRecorder()
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("jobId", "job-1")
+	detailReq = detailReq.WithContext(context.WithValue(detailReq.Context(), chi.RouteCtxKey, rctx))
+
+	handler.GetImportJob(detailRec, detailReq)
+
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("expected valid JSON response, got %v: %s", err, detailRec.Body.String())
+	}
+
+	if resp["status"] != "failed" {
+		t.Fatalf("expected status failed, got %v", resp["status"])
+	}
+
+	errorMessage, _ := resp["errorMessage"].(string)
+	if errorMessage == "" {
+		t.Fatal("expected a non-empty errorMessage for the frontend to display")
+	}
+
+	if !strings.Contains(errorMessage, "2 rows failed") {
+		t.Fatalf("expected errorMessage to include the failure count, got %q", errorMessage)
+	}
+
+	if !strings.Contains(errorMessage, "price_val") {
+		t.Fatalf("expected errorMessage to name the dominant failing field, got %q", errorMessage)
 	}
 }

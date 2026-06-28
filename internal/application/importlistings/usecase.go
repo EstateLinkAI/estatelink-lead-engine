@@ -241,7 +241,7 @@ func (u *UseCase) clearCancelFunc(jobID string) {
 // strategy scores), so the worker count is tuned to keep the pool busy
 // without exhausting it alongside normal API traffic - see pgxpool.MaxConns
 // in cmd/api/main.go.
-func (u *UseCase) processPayloadConcurrently(ctx context.Context, jobID string, payload []json.RawMessage) {
+func (u *UseCase) processPayloadConcurrently(ctx context.Context, jobID string, payload []json.RawMessage, tracker *failureTracker) {
 	sem := make(chan struct{}, u.importWorkers)
 	var wg sync.WaitGroup
 
@@ -258,6 +258,7 @@ func (u *UseCase) processPayloadConcurrently(ctx context.Context, jobID string, 
 			defer func() { <-sem }()
 
 			if err := u.processOne(ctx, jobID, raw); err != nil {
+				tracker.Record(err)
 				_ = u.importJobs.IncrementFailed(ctx, jobID)
 				return
 			}
@@ -278,7 +279,8 @@ func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []
 		return
 	}
 
-	u.processPayloadConcurrently(ctx, jobID, payload)
+	tracker := newFailureTracker()
+	u.processPayloadConcurrently(ctx, jobID, payload, tracker)
 
 	if ctx.Err() != nil {
 		u.logActivityBestEffort(context.Background(), activitylog.ActivityLog{
@@ -305,8 +307,12 @@ func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []
 		return
 	}
 
+	if job.FailedCount > 0 {
+		u.logFailureSamples(jobID, job.FailedCount, job.TotalCount, tracker)
+	}
+
 	if job.FailedCount > 0 && job.ProcessedCount == 0 {
-		reason := "all listings failed to import"
+		reason := tracker.Summary(job.FailedCount)
 		_ = u.importJobs.MarkFailed(ctx, jobID, reason)
 		u.logImportFailure(ctx, jobID, activityCtx, reason)
 		return
@@ -342,27 +348,43 @@ func (u *UseCase) processImportJob(ctx context.Context, jobID string, payload []
 	})
 }
 
+// processOne unmarshals and ingests a single row. Unmarshal errors are
+// classified (see classifyUnmarshalError) rather than treated as one opaque
+// "invalid listing JSON" - a single malformed field (e.g. price_val sent as
+// a float instead of an int) used to abort the whole row with no way to tell
+// which field, or even which row, was the problem.
+//
+// The raw_listings row is saved as soon as we have a usable (source,
+// property_id) key, before any further validation, so every identifiable
+// row - including ones that fail validation - ends up with a persisted
+// processing_status/error_message instead of only a job-level counter bump.
 func (u *UseCase) processOne(ctx context.Context, jobID string, raw json.RawMessage) error {
 	var input cleanListingInput
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return fmt.Errorf("invalid listing JSON: %w", err)
-	}
+	unmarshalErr := classifyUnmarshalError(json.Unmarshal(raw, &input))
 
 	if input.Source == "" {
-		return errors.New("source is required")
+		if unmarshalErr != nil {
+			return unmarshalErr
+		}
+		return &RowImportError{Category: CategoryMissingSource, Err: errors.New("source is required")}
 	}
 
 	if input.PropertyID == "" {
-		return errors.New("property_id is required")
+		if unmarshalErr != nil {
+			return unmarshalErr
+		}
+		return &RowImportError{Category: CategoryMissingPropertyID, Err: errors.New("property_id is required")}
 	}
 
+	var scrapedAtErr *RowImportError
 	var scrapedAt *time.Time
 	if input.ScrapedAt != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, input.ScrapedAt)
 		if err != nil {
-			return fmt.Errorf("invalid scraped_at value: %w", err)
+			scrapedAtErr = &RowImportError{Category: CategoryInvalidScrapedAt, Err: fmt.Errorf("invalid scraped_at value %q: %w", input.ScrapedAt, err)}
+		} else {
+			scrapedAt = &parsed
 		}
-		scrapedAt = &parsed
 	}
 
 	rawListing := rawlisting.RawListing{
@@ -376,21 +398,66 @@ func (u *UseCase) processOne(ctx context.Context, jobID string, raw json.RawMess
 
 	rawListingID, err := u.rawListings.Save(ctx, rawListing)
 	if err != nil {
-		return fmt.Errorf("save raw listing: %w", err)
+		return &RowImportError{Category: CategorySaveFailed, Err: fmt.Errorf("save raw listing: %w", err)}
+	}
+
+	if rowErr := firstRowError(unmarshalErr, scrapedAtErr); rowErr != nil {
+		_ = u.rawListings.MarkFailed(ctx, rawListingID, rowErr.Error())
+		return rowErr
 	}
 
 	mappedListing := mapCleanListingToDomain(input)
 
 	if _, err := u.ingester.Execute(ctx, mappedListing); err != nil {
-		_ = u.rawListings.MarkFailed(ctx, rawListingID, err.Error())
-		return fmt.Errorf("ingest listing from raw listing %s: %w", rawListingID, err)
+		rowErr := &RowImportError{Category: CategoryIngestFailed, Err: fmt.Errorf("ingest listing from raw listing %s: %w", rawListingID, err)}
+		_ = u.rawListings.MarkFailed(ctx, rawListingID, rowErr.Error())
+		return rowErr
 	}
 
 	if err := u.rawListings.MarkProcessed(ctx, rawListingID); err != nil {
-		return fmt.Errorf("mark raw listing processed: %w", err)
+		return &RowImportError{Category: CategoryUnknown, Err: fmt.Errorf("mark raw listing processed: %w", err)}
 	}
 
 	return nil
+}
+
+// classifyUnmarshalError turns a json.Unmarshal error into a RowImportError
+// naming the offending field when possible (json.UnmarshalTypeError), so
+// "most common error" summaries can say e.g. "invalid price_val field"
+// instead of a generic parse failure.
+func classifyUnmarshalError(err error) *RowImportError {
+	if err == nil {
+		return nil
+	}
+
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return &RowImportError{
+			Category: invalidFieldCategory(typeErr.Field),
+			Err:      fmt.Errorf("invalid value for field %q: expected %s, got %s", typeErr.Field, typeErr.Type, typeErr.Value),
+		}
+	}
+
+	return &RowImportError{Category: CategoryInvalidJSON, Err: fmt.Errorf("invalid listing JSON: %w", err)}
+}
+
+func firstRowError(errs ...*RowImportError) *RowImportError {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (u *UseCase) logFailureSamples(jobID string, failedCount, totalCount int, tracker *failureTracker) {
+	samples := tracker.Samples()
+
+	log.Printf("import job %s: %d/%d rows failed", jobID, failedCount, totalCount)
+
+	for i, sample := range samples {
+		log.Printf("import job %s: failure %d/%d: %s", jobID, i+1, len(samples), sample)
+	}
 }
 
 func mapCleanListingToDomain(input cleanListingInput) listing.Listing {
