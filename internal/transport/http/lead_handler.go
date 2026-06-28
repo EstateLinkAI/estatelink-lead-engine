@@ -55,7 +55,7 @@ func (h *LeadHandler) List(w http.ResponseWriter, r *http.Request) {
 		Offset:         offset,
 	}
 
-	results, err := h.useCase.List(r.Context(), filters)
+	results, pagination, err := h.useCase.List(r.Context(), filters)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to fetch leads",
@@ -63,7 +63,15 @@ func (h *LeadHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, leadListResponse{
+		Data:       results,
+		Pagination: pagination,
+	})
+}
+
+type leadListResponse struct {
+	Data       []lead.ReadModel `json:"data"`
+	Pagination lead.Pagination  `json:"pagination"`
 }
 
 func (h *LeadHandler) GetByID(w http.ResponseWriter, r *http.Request) {

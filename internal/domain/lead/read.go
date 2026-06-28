@@ -28,3 +28,17 @@ type ListFilters struct {
 	Limit          int
 	Offset         int
 }
+
+type ListResult struct {
+	Items []ReadModel
+	Total int
+}
+
+type Pagination struct {
+	Limit       int  `json:"limit"`
+	Offset      int  `json:"offset"`
+	Total       int  `json:"total"`
+	Returned    int  `json:"returned"`
+	HasNext     bool `json:"hasNext"`
+	HasPrevious bool `json:"hasPrevious"`
+}
