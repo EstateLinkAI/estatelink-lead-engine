@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,9 +17,10 @@ import (
 )
 
 type fakeRawListingRepo struct {
-	mu        sync.Mutex
-	saveCalls int
-	nextID    int
+	mu            sync.Mutex
+	saveCalls     int
+	nextID        int
+	failedReasons []string
 }
 
 func (r *fakeRawListingRepo) Save(ctx context.Context, l rawlisting.RawListing) (string, error) {
@@ -31,6 +34,9 @@ func (r *fakeRawListingRepo) Save(ctx context.Context, l rawlisting.RawListing) 
 func (r *fakeRawListingRepo) MarkProcessed(ctx context.Context, id string) error { return nil }
 
 func (r *fakeRawListingRepo) MarkFailed(ctx context.Context, id string, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failedReasons = append(r.failedReasons, reason)
 	return nil
 }
 
@@ -38,6 +44,14 @@ func (r *fakeRawListingRepo) SaveCalls() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.saveCalls
+}
+
+func (r *fakeRawListingRepo) FailedReasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.failedReasons))
+	copy(out, r.failedReasons)
+	return out
 }
 
 type fakeImportJobRepo struct {
@@ -140,6 +154,12 @@ type fakeIngester struct{}
 
 func (f *fakeIngester) Execute(ctx context.Context, input listing.Listing) (ingestlisting.Result, error) {
 	return ingestlisting.Result{Listing: input}, nil
+}
+
+type alwaysFailingIngester struct{}
+
+func (f *alwaysFailingIngester) Execute(ctx context.Context, input listing.Listing) (ingestlisting.Result, error) {
+	return ingestlisting.Result{}, errors.New("listing insert failed: price out of range")
 }
 
 func validCleanListingPayload(n int) []json.RawMessage {
@@ -253,5 +273,150 @@ func TestCancelImportJobMarksJobCancelled(t *testing.T) {
 
 	if job.Status != importjob.StatusCancelled {
 		t.Fatalf("expected status cancelled, got %s", job.Status)
+	}
+}
+
+// invalidPriceTypePayload mirrors a real staging incident: price_val sent as
+// a non-integer JSON number (e.g. 3.62) fails to unmarshal into the int
+// field, but source/property_id still parse fine since they're independent
+// JSON keys.
+func invalidPriceTypePayload(n int) []json.RawMessage {
+	payload := make([]json.RawMessage, 0, n)
+	for i := 0; i < n; i++ {
+		raw := fmt.Sprintf(`{"source":"zillow","property_id":"p%d","title":"House","price_val":3.62}`, i)
+		payload = append(payload, json.RawMessage(raw))
+	}
+	return payload
+}
+
+func TestProcessOneClassifiesInvalidFieldTypeAndStoresReason(t *testing.T) {
+	rawRepo := &fakeRawListingRepo{}
+	jobRepo := newFakeImportJobRepo()
+
+	uc := NewUseCase(rawRepo, jobRepo, &fakeIngester{}, nil, 10, 4)
+
+	raw := json.RawMessage(`{"source":"zillow","property_id":"123","price_val":3.62}`)
+
+	err := uc.processOne(context.Background(), "job-1", raw)
+	if err == nil {
+		t.Fatal("expected an error for a row with a malformed price_val field")
+	}
+
+	var rowErr *RowImportError
+	if !errors.As(err, &rowErr) {
+		t.Fatalf("expected *RowImportError, got %T: %v", err, err)
+	}
+
+	if rowErr.Category != invalidFieldCategory("price_val") {
+		t.Fatalf("expected category %q, got %q", invalidFieldCategory("price_val"), rowErr.Category)
+	}
+
+	if !strings.Contains(err.Error(), "price_val") {
+		t.Fatalf("expected error message to mention price_val, got %q", err.Error())
+	}
+
+	reasons := rawRepo.FailedReasons()
+	if len(reasons) != 1 {
+		t.Fatalf("expected raw_listings to record exactly 1 failure reason, got %d: %v", len(reasons), reasons)
+	}
+
+	if !strings.Contains(reasons[0], "price_val") {
+		t.Fatalf("expected stored raw_listings failure reason to mention price_val, got %q", reasons[0])
+	}
+}
+
+func TestStartCleanListingsImportAllRowsFailedReachesFailedStatusWithUsefulSummary(t *testing.T) {
+	rawRepo := &fakeRawListingRepo{}
+	jobRepo := newFakeImportJobRepo()
+
+	uc := NewUseCase(rawRepo, jobRepo, &fakeIngester{}, nil, 50, 4)
+
+	payload := invalidPriceTypePayload(20)
+
+	_, err := uc.StartCleanListingsImport(context.Background(), payload, ActivityContext{ActorUserID: "user-1"})
+	if err != nil {
+		t.Fatalf("expected no error starting the import, got %v", err)
+	}
+
+	jobRepo.waitDone(t)
+
+	job, _ := jobRepo.GetByID(context.Background(), "job-1")
+
+	if job.Status != importjob.StatusFailed {
+		t.Fatalf("expected job status failed, got %s", job.Status)
+	}
+
+	if job.FailedCount != 20 || job.ProcessedCount != 0 {
+		t.Fatalf("expected failedCount=20 processedCount=0, got failed=%d processed=%d", job.FailedCount, job.ProcessedCount)
+	}
+
+	if job.ErrorMessage == nil || *job.ErrorMessage == "" {
+		t.Fatal("expected a non-empty error_message explaining the failure")
+	}
+
+	msg := *job.ErrorMessage
+	if !strings.Contains(msg, "20 rows failed") {
+		t.Fatalf("expected error_message to include the failure count, got %q", msg)
+	}
+
+	if !strings.Contains(msg, "price_val") {
+		t.Fatalf("expected error_message to name the dominant failing field, got %q", msg)
+	}
+
+	reasons := rawRepo.FailedReasons()
+	if len(reasons) != 20 {
+		t.Fatalf("expected all 20 rows to have a stored raw_listings failure reason, got %d", len(reasons))
+	}
+}
+
+func TestStartCleanListingsImportAllRowsFailViaIngestKeepsTerminalFailedStatus(t *testing.T) {
+	rawRepo := &fakeRawListingRepo{}
+	jobRepo := newFakeImportJobRepo()
+
+	uc := NewUseCase(rawRepo, jobRepo, &alwaysFailingIngester{}, nil, 10, 4)
+
+	payload := validCleanListingPayload(5)
+
+	_, err := uc.StartCleanListingsImport(context.Background(), payload, ActivityContext{ActorUserID: "user-1"})
+	if err != nil {
+		t.Fatalf("expected no error starting the import, got %v", err)
+	}
+
+	jobRepo.waitDone(t)
+
+	job, _ := jobRepo.GetByID(context.Background(), "job-1")
+
+	if job.Status != importjob.StatusFailed {
+		t.Fatalf("expected job to reach terminal failed status, got %s", job.Status)
+	}
+
+	if job.ErrorMessage == nil || !strings.Contains(*job.ErrorMessage, "5 rows failed") {
+		t.Fatalf("expected error_message to summarize the failure count, got %v", job.ErrorMessage)
+	}
+}
+
+func TestStartCleanListingsImportPartialFailureStillCompletes(t *testing.T) {
+	rawRepo := &fakeRawListingRepo{}
+	jobRepo := newFakeImportJobRepo()
+
+	uc := NewUseCase(rawRepo, jobRepo, &fakeIngester{}, nil, 10, 4)
+
+	payload := append(validCleanListingPayload(3), invalidPriceTypePayload(2)...)
+
+	_, err := uc.StartCleanListingsImport(context.Background(), payload, ActivityContext{ActorUserID: "user-1"})
+	if err != nil {
+		t.Fatalf("expected no error starting the import, got %v", err)
+	}
+
+	jobRepo.waitDone(t)
+
+	job, _ := jobRepo.GetByID(context.Background(), "job-1")
+
+	if job.Status != importjob.StatusCompleted {
+		t.Fatalf("expected job status completed when some rows succeed, got %s", job.Status)
+	}
+
+	if job.ProcessedCount != 3 || job.FailedCount != 2 {
+		t.Fatalf("expected processed=3 failed=2, got processed=%d failed=%d", job.ProcessedCount, job.FailedCount)
 	}
 }
