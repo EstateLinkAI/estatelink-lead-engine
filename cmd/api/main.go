@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -19,11 +20,14 @@ import (
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/domain/user"
 	"github.com/EstateLinkAI/estatelink-lead-engine/internal/infrastructure/postgres"
 	httptransport "github.com/EstateLinkAI/estatelink-lead-engine/internal/transport/http"
+	"github.com/EstateLinkAI/estatelink-lead-engine/migrations"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func main() {
@@ -63,6 +67,14 @@ func main() {
 
 	if err := db.Ping(ctx); err != nil {
 		log.Fatalf("failed to ping database: %v", err)
+	}
+
+	// Run pending migrations on every boot so the schema the binary expects
+	// can never silently drift from what's actually deployed (a missing
+	// migration here previously made every row of a bulk import fail with
+	// "column ... does not exist", with no way to tell from the API alone).
+	if err := runMigrations(databaseURL); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
 	}
 
 	// Repositories
@@ -196,6 +208,26 @@ func main() {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
+}
+
+// runMigrations applies any pending goose migrations embedded in the
+// migrations package. It uses its own short-lived database/sql connection
+// (via the pgx stdlib driver) since goose operates on *sql.DB, separate from
+// the pgxpool used for normal request handling.
+func runMigrations(databaseURL string) error {
+	sqlDB, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	goose.SetBaseFS(migrations.FS)
+
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+
+	return goose.Up(sqlDB, ".")
 }
 
 func mustGetEnv(name string) string {
